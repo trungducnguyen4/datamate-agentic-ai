@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from datamate.core.types import AnswerType, QuestionItem, SubmissionItem
+from datamate.core.nlp import VietnameseNLP
 from datamate.data.loader import BusinessDataLoader
 from datamate.data.schema_inspector import SchemaInspector
 from datamate.engine.agent import DataMateAgent
@@ -93,33 +94,51 @@ def ask_question(req: AskRequest):
         as_of_date=req.as_of_date,
     )
 
-    # 1. Resolve temporal
-    temp_range = TemporalResolver.resolve(req.question, req.as_of_date)
+    # 1. NLP Analysis
+    nlp_info = VietnameseNLP.process_query(req.question)
+
+    # 2. Resolve temporal
+    temp_range = TemporalResolver.resolve(nlp_info.clean_query, req.as_of_date)
+    if not temp_range:
+        temp_range = TemporalResolver.resolve(req.question, req.as_of_date)
+
     temp_info = (
         {
             "start_date": temp_range.start_date,
             "end_date": temp_range.end_date,
             "target_month": temp_range.target_month,
             "is_exact_day": temp_range.is_exact_day,
+            "is_ambiguous": temp_range.is_ambiguous,
         }
         if temp_range
         else None
     )
 
-    # 2. Get business schema
+    # 3. Get business schema
     loader = agent.get_or_load_business(req.business_id)
     tables = SchemaInspector.inspect(loader.conn)
 
-    # 3. Plan compilation
+    # 4. Plan compilation
     plan = BusinessRuleCompiler.compile(req.question, req.as_of_date, tables)
 
-    # 4. Agent answer
+    # 5. Agent answer
     sub_item = agent.answer_question(q_item)
     latency_ms = round((time.time() - t_start) * 1000, 2)
 
     return {
         "submission": sub_item.to_dict(),
         "temporal": temp_info,
+        "nlp": {
+            "clean_query": nlp_info.clean_query,
+            "is_quantity_query": nlp_info.is_quantity_query,
+            "is_revenue_query": nlp_info.is_revenue_query,
+            "is_profit_cost_query": nlp_info.is_profit_cost_query,
+            "is_expiration_query": nlp_info.is_expiration_query,
+            "is_stock_query": nlp_info.is_stock_query,
+            "is_why_causal": nlp_info.is_why_causal,
+            "is_future": nlp_info.is_future,
+            "is_ambiguous_time": nlp_info.is_ambiguous_time,
+        },
         "plan": {
             "intent": plan.intent,
             "expected_type": plan.expected_type.value,

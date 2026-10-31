@@ -5,7 +5,6 @@ from typing import Dict, Optional, Tuple
 
 
 # Known Lunar New Year (Tết Mùng 1) and Key Lunar Dates for 2024 - 2027
-# Format: (year, month, day) in Solar Calendar
 LUNAR_KEY_DATES: Dict[Tuple[int, int, int], str] = {
     # 2024 (Giáp Thìn)
     (2024, 2, 10): "Tết Nguyên Đán (Mùng 1 Tết Giáp Thìn)",
@@ -32,30 +31,45 @@ LUNAR_KEY_DATES: Dict[Tuple[int, int, int], str] = {
     (2027, 9, 15): "Tết Trung Thu (Rằm tháng Tám)",
 }
 
-# Mapping festival keyword -> (lunar_month, lunar_day)
-LUNAR_FESTIVALS = {
-    "tet": (1, 1),
-    "tết": (1, 1),
-    "tết nguyên đán": (1, 1),
-    "mùng 1 tết": (1, 1),
-    "mùng 2 tết": (1, 2),
-    "mùng 3 tết": (1, 3),
-    "rằm tháng giêng": (1, 15),
-    "vu lan": (7, 15),
-    "rằm tháng 7": (7, 15),
-    "rằm tháng bảy": (7, 15),
-    "trung thu": (8, 15),
-    "rằm tháng 8": (8, 15),
-    "rằm tháng tám": (8, 15),
+# Solar date ranges for Lunar Month 1 (Tháng Giêng âm lịch) and Lunar 1-15 (Mùng 1 đến Rằm)
+LUNAR_RANGES: Dict[int, Dict[str, Tuple[str, str]]] = {
+    2024: {
+        "thang_gieng": ("2024-02-10", "2024-03-09"),
+        "mung_1_den_ram": ("2024-02-10", "2024-02-24"),
+        "tet": ("2024-02-10", "2024-02-10"),
+    },
+    2025: {
+        "thang_gieng": ("2025-01-29", "2025-02-27"),
+        "mung_1_den_ram": ("2025-01-29", "2025-02-12"),
+        "tet": ("2025-01-29", "2025-01-29"),
+    },
+    2026: {
+        "thang_gieng": ("2026-02-17", "2026-03-18"),
+        "mung_1_den_ram": ("2026-02-17", "2026-03-03"),
+        "tet": ("2026-02-17", "2026-02-17"),
+    },
+    2027: {
+        "thang_gieng": ("2027-02-06", "2027-03-07"),
+        "mung_1_den_ram": ("2027-02-06", "2027-02-20"),
+        "tet": ("2027-02-06", "2027-02-06"),
+    },
 }
 
 
 def get_festival_solar_date(festival_name: str, solar_year: int) -> Optional[str]:
     """Resolve a Vietnamese lunar festival to a solar date YYYY-MM-DD for a given year."""
     fest_key = festival_name.strip().lower()
-    
-    # Specific lookup for 2025 & 2026
+
     year_map = {
+        2024: {
+            "tet": "2024-02-10",
+            "tết": "2024-02-10",
+            "tết nguyên đán": "2024-02-10",
+            "mùng 1 tết": "2024-02-10",
+            "rằm tháng giêng": "2024-02-24",
+            "vu lan": "2024-08-18",
+            "trung thu": "2024-09-17",
+        },
         2025: {
             "tet": "2025-01-29",
             "tết": "2025-01-29",
@@ -77,10 +91,26 @@ def get_festival_solar_date(festival_name: str, solar_year: int) -> Optional[str
             "rằm tháng giêng": "2026-03-03",
             "vu lan": "2026-08-27",
             "trung thu": "2026-09-25",
-        }
+        },
+        2027: {
+            "tet": "2027-02-06",
+            "tết": "2027-02-06",
+            "tết nguyên đán": "2027-02-06",
+            "mùng 1 tết": "2027-02-06",
+            "rằm tháng giêng": "2027-02-20",
+            "vu lan": "2027-08-16",
+            "trung thu": "2027-09-15",
+        },
     }
-    
+
     if solar_year in year_map and fest_key in year_map[solar_year]:
         return year_map[solar_year][fest_key]
-    
+
+    return None
+
+
+def get_lunar_range(range_type: str, solar_year: int) -> Optional[Tuple[str, str]]:
+    """Get start and end solar dates for specific lunar intervals."""
+    if solar_year in LUNAR_RANGES and range_type in LUNAR_RANGES[solar_year]:
+        return LUNAR_RANGES[solar_year][range_type]
     return None
