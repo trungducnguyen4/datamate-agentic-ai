@@ -122,3 +122,18 @@ def test_agent_abstain_on_unknown(mock_dataset_dir):
     )
     ans4 = agent.answer_question(q4)
     assert ans4.type == AnswerType.ABSTAIN
+
+
+def test_agent_boba_house_best_seller():
+    # Test on data/sample/biz_042 with question from user screenshot
+    agent = DataMateAgent("data/sample")
+    q = QuestionItem(
+        id="q_boba_01",
+        business_id="biz_042",
+        question="món bán chạy nhất tuần này là món nào",
+        as_of_date="2026-03-04",
+    )
+    ans = agent.answer_question(q)
+    assert ans.type == AnswerType.STRING
+    assert ans.answer == "Trà sữa trân châu đường đen"
+

@@ -55,8 +55,13 @@ class BusinessRuleCompiler:
             cls._find_sales_columns(tables)
         )
 
-        # 2. Ranking / Best-selling product ("bán chạy nhất", "bán dc nhiều nhất", "bán ít nhất")
-        if any(w in q_lower for w in ["bán chạy nhất", "bán dc nhiều nhất", "bán được nhiều nhất", "bán nhiều nhất", "sp bán"]):
+        # 2. Ranking / Best-selling product or item ("bán chạy nhất", "món bán chạy", "nhiều nhất", etc.)
+        ranking_keywords = [
+            "bán chạy", "bán dc", "bán được", "bán nhiều", "bán ít",
+            "mua nhiều nhất", "được mua nhiều nhất", "chạy nhất", "nhiều nhất",
+            "ít nhất", "thấp nhất", "cao nhất", "top"
+        ]
+        if any(w in q_lower for w in ranking_keywords) and not any(w in q_lower for w in ["tỷ lệ", "phần trăm", "ai nợ"]):
             if not sales_table or not prod_name_col:
                 return CompiledQueryPlan(
                     intent="ranking_product",
@@ -72,7 +77,14 @@ class BusinessRuleCompiler:
                 where_clauses.append(f"`{date_col}` >= '{time_range.start_date}' AND `{date_col}` <= '{time_range.end_date}'")
 
             where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-            sum_target = f"SUM(`{qty_col}`)" if qty_col else "COUNT(*)"
+            order_dir = "ASC" if any(w in q_lower for w in ["ít nhất", "thấp nhất"]) else "DESC"
+            
+            # Ranking criterion: revenue vs quantity
+            if any(w in q_lower for w in ["doanh thu", "doanh số", "tiền"]) and amount_col:
+                sum_target = f"SUM({amount_col})"
+            else:
+                sum_target = f"SUM(`{qty_col}`)" if qty_col else "COUNT(*)"
+
             tie_breaker = f", `{prod_code_col}` ASC" if prod_code_col else f", `{prod_name_col}` ASC"
 
             sql = f"""
@@ -80,7 +92,7 @@ class BusinessRuleCompiler:
             FROM `{sales_table}`
             {where_str}
             GROUP BY `{prod_name_col}`
-            ORDER BY {sum_target} DESC {tie_breaker}
+            ORDER BY {sum_target} {order_dir} {tie_breaker}
             LIMIT 1;
             """
             return CompiledQueryPlan(
@@ -249,6 +261,14 @@ class BusinessRuleCompiler:
                     status_col = c_name
                 elif role == "customer" and not cust_col:
                     cust_col = c_name
+
+            # If prod_name_col was not matched by keyword, try fallback text column
+            if not prod_name_col:
+                for col in tbl_info.columns:
+                    if col.name not in (date_col, status_col, cust_col, qty_col, total_amount_col, unit_price_col):
+                        if "text" in col.data_type.lower() or not col.semantic_role:
+                            prod_name_col = col.name
+                            break
 
             # Determine best amount expression
             if total_amount_col:

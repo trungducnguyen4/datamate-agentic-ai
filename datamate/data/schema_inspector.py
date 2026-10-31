@@ -20,14 +20,17 @@ class TableInfo(BaseModel):
 class SchemaInspector:
     """Inspects tables in SQLite and infers semantic roles of columns."""
 
-    DATE_KEYWORDS = ["ngay", "date", "created", "time", "thoi_gian"]
+    DATE_KEYWORDS = ["ngay", "date", "created", "time", "thoi_gian", "order"]
     STATUS_KEYWORDS = ["trang_thai", "status", "state", "tinh_trang"]
-    TOTAL_AMOUNT_KEYWORDS = ["thanh_tien", "tong_tien", "doanh_thu", "total_amount", "amount", "subtotal"]
+    TOTAL_AMOUNT_KEYWORDS = ["thanh_tien", "tong_tien", "doanh_thu", "total_amount", "amount", "subtotal", "tong"]
     UNIT_PRICE_KEYWORDS = ["don_gia", "unit_price", "price", "gia_ban", "gia"]
     QUANTITY_KEYWORDS = ["so_luong", "quantity", "qty", "sl"]
-    PRODUCT_KEYWORDS = ["san_pham", "sp", "product", "item", "hang_hoa", "mat_hang", "ten_sp", "ma_sp"]
-    CUSTOMER_KEYWORDS = ["khach_hang", "kh", "customer", "client", "nguoi_mua"]
-    DEBT_KEYWORDS = ["cong_no", "con_no", "no", "debt", "chua_tra"]
+    PRODUCT_KEYWORDS = [
+        "san_pham", "sp", "product", "item", "hang_hoa", "mat_hang", "ten_sp", "ma_sp",
+        "ten_mon", "mon_an", "mon", "do_uong", "ten_thuoc", "thuoc", "hang", "vat_tu", "dich_vu"
+    ]
+    CUSTOMER_KEYWORDS = ["khach_hang", "kh", "customer", "client", "nguoi_mua", "ten_khach_hang", "benh_nhan"]
+    DEBT_KEYWORDS = ["cong_no", "con_no", "no", "debt", "chua_tra", "tong_no"]
 
     @classmethod
     def inspect(cls, conn: sqlite3.Connection) -> Dict[str, TableInfo]:
