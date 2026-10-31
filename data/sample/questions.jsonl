@@ -4,3 +4,16 @@
 {"id": "q_demo_04", "business_id": "biz_042", "question": "tỷ lệ hủy đơn tuần này là bao nhiêu", "as_of_date": "2026-03-04"}
 {"id": "q_demo_05", "business_id": "biz_099", "question": "những ai đang nợ tiền chưa trả", "as_of_date": "2026-03-04"}
 {"id": "q_demo_06", "business_id": "biz_099", "question": "lợi nhuận ròng tháng này là bao nhiêu", "as_of_date": "2026-03-04"}
+{"id": "q_probe_01", "business_id": "biz_fixture_probe", "question": "Sản phẩm nào bán được nhiều nhất?", "as_of_date": "2026-03-04"}
+{"id": "q_probe_02", "business_id": "biz_fixture_probe", "question": "Sản phẩm nào thu về nhiều tiền nhất?", "as_of_date": "2026-03-04"}
+{"id": "q_qa_01", "business_id": "biz_099", "question": "Tháng này mặt hàng nào bán chạy nhất?", "as_of_date": "2026-03-04"}
+{"id": "q_qa_02", "business_id": "biz_099", "question": "Anh/chị xem giúp em tháng này thuốc nào bán chạy nhất với.", "as_of_date": "2026-03-04"}
+{"id": "q_qa_03", "business_id": "biz_099", "question": "thang nay mat hang nao ban chay nhat", "as_of_date": "2026-03-04"}
+{"id": "q_qa_04", "business_id": "biz_099", "question": "sp nào bán dc nhìu nhất tuần rùi z shop", "as_of_date": "2026-03-04"}
+{"id": "q_qa_05", "business_id": "biz_099", "question": "Bữa giờ thuốc nào bán chạy nhất vậy?", "as_of_date": "2026-03-04"}
+{"id": "q_qa_06", "business_id": "biz_099", "question": "Tháng ni thuốc mô bán chạy nhất rứa?", "as_of_date": "2026-03-04"}
+{"id": "q_qa_07", "business_id": "biz_099", "question": "7 ngày gần đây bán được bao nhiêu?", "as_of_date": "2026-03-04"}
+{"id": "q_qa_08", "business_id": "biz_099", "question": "Từ sau Tết đến giờ bán được bao nhiêu?", "as_of_date": "2026-03-04"}
+{"id": "q_qa_09", "business_id": "biz_099", "question": "Tại sao doanh thu tháng này giảm?", "as_of_date": "2026-03-04"}
+{"id": "q_qa_10", "business_id": "biz_099", "question": "thuốc nào sắp hết date vậy?", "as_of_date": "2026-03-04"}
+{"id": "q_qa_11", "business_id": "biz_099", "question": "Kho còn bao nhiêu thuốc Panadol?", "as_of_date": "2026-03-04"}

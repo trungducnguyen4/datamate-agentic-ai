@@ -1,10 +1,30 @@
 let businesses = [];
 let currentTables = {};
+let testedCases = new Set();
+
+const CHECKLIST_ITEMS = [
+  { id: "VN-02", biz: "biz_099", q: "Tháng này mặt hàng nào bán chạy nhất?", desc: "Câu tự nhiên, chuẩn (Số lượng)", date: "2026-03-04" },
+  { id: "VN-03", biz: "biz_099", q: "Anh/chị xem giúp em tháng này thuốc nào bán chạy nhất với.", desc: "Xưng hô và lịch sự", date: "2026-03-04" },
+  { id: "CHAT-01", biz: "biz_099", q: "sp bán dc nhiều nhất tuần rồi là gì", desc: "Viết tắt, benchmark", date: "2026-03-04" },
+  { id: "CHAT-06", biz: "biz_099", q: "thang nay mat hang nao ban chay nhat", desc: "Tiếng Việt không dấu", date: "2026-03-04" },
+  { id: "CHAT-07", biz: "biz_099", q: "sp nào bán dc nhìu nhất tuần rùi z shop", desc: "Teencode, tiếng lóng", date: "2026-03-04" },
+  { id: "DIA-04", biz: "biz_099", q: "Bữa giờ thuốc nào bán chạy nhất vậy?", desc: "Phương ngữ Nam, thời gian mơ hồ -> ABSTAIN", date: "2026-03-04" },
+  { id: "DIA-06", biz: "biz_099", q: "Tháng ni thuốc mô bán chạy nhất rứa?", desc: "Phương ngữ Trung", date: "2026-03-04" },
+  { id: "SEM-01", biz: "biz_fixture_probe", q: "Sản phẩm nào bán được nhiều nhất?", desc: "Số lượng (Sản phẩm A)", date: "2026-03-04" },
+  { id: "SEM-02", biz: "biz_fixture_probe", q: "Sản phẩm nào thu về nhiều tiền nhất?", desc: "Doanh thu (Sản phẩm B)", date: "2026-03-04" },
+  { id: "SEM-03", biz: "biz_fixture_probe", q: "Sản phẩm nào có lợi nhuận cao nhất?", desc: "Cần giá vốn -> UNANSWERABLE", date: "2026-03-04" },
+  { id: "TIME-04", biz: "biz_099", q: "7 ngày gần đây bán được bao nhiêu?", desc: "Khoảng thời gian động 7 ngày", date: "2026-03-04" },
+  { id: "TIME-06", biz: "biz_099", q: "Từ sau Tết đến giờ bán được bao nhiêu?", desc: "Lịch Âm (Tết Bính Ngọ)", date: "2026-03-04" },
+  { id: "NEG-01", biz: "biz_099", q: "Lợi nhuận ròng tháng này bao nhiêu?", desc: "Thiếu chi phí -> UNANSWERABLE", date: "2026-03-04" },
+  { id: "NEG-04", biz: "biz_099", q: "Tại sao doanh thu tháng này giảm?", desc: "Không bịa nguyên nhân -> UNANSWERABLE", date: "2026-03-04" },
+  { id: "NEG-09", biz: "biz_099", q: "Thuốc nào bán chạy nhất trong ngày 2026-03-10?", desc: "Không có giao dịch -> Không tự bịa sản phẩm", date: "2026-03-10" }
+];
 
 async function init() {
   await loadBusinesses();
   await loadSampleQuestions();
   setupEvents();
+  renderChecklist();
 }
 
 async function loadBusinesses() {
@@ -100,24 +120,21 @@ function openTableModal(tName, t) {
   });
   html += `</div></div>`;
 
-  html += `<h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Xem trước dữ liệu (Top 10 rows)</h4>
-  <div class="overflow-x-auto border border-slate-800 rounded-xl">
-    <table class="w-full text-left text-xs">
-      <thead class="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
-        <tr>`;
-  t.preview_cols.forEach(c => {
-    html += `<th class="px-3 py-2.5">${c}</th>`;
-  });
-  html += `</tr></thead><tbody class="divide-y divide-slate-800 text-slate-300">`;
-  t.preview_rows.forEach(r => {
-    html += `<tr class="hover:bg-slate-800/40">`;
-    r.forEach(v => {
-      html += `<td class="px-3 py-2 whitespace-nowrap">${v !== null ? v : '<span class="text-slate-600">NULL</span>'}</td>`;
-    });
-    html += `</tr>`;
-  });
-  html += `</tbody></table></div>`;
-
+  if (t.preview_rows && t.preview_rows.length > 0) {
+    html += `<div>
+      <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Dữ liệu xem trước (Preview ${t.preview_rows.length} dòng)</h4>
+      <div class="overflow-x-auto border border-slate-800 rounded-xl">
+        <table class="w-full text-xs text-left text-slate-300">
+          <thead class="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
+            <tr>${t.preview_cols.map(c => `<th class="px-3 py-2.5">${c}</th>`).join('')}</tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800/60">
+            ${t.preview_rows.map(r => `<tr class="hover:bg-slate-800/40">${r.map(v => `<td class="px-3 py-2 font-mono text-[11px]">${v !== null ? v : '<span class=\"text-slate-600\">null</span>'}</td>`).join('')}</tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
   content.innerHTML = html;
   const modal = document.getElementById('tableModal');
   if (modal) modal.classList.remove('hidden');
@@ -155,16 +172,84 @@ async function loadSampleQuestions() {
   }
 }
 
+function renderChecklist() {
+  const container = document.getElementById('checklistContainer');
+  const prog = document.getElementById('qaProgress');
+  if (prog) prog.textContent = `${testedCases.size}/${CHECKLIST_ITEMS.length}`;
+  if (!container) return;
+
+  container.innerHTML = '';
+  CHECKLIST_ITEMS.forEach(item => {
+    const isDone = testedCases.has(item.id);
+    const div = document.createElement('div');
+    div.className = `p-3 rounded-xl border flex items-center justify-between transition cursor-pointer ${
+      isDone ? 'bg-purple-950/30 border-purple-500/40' : 'bg-slate-900 border-slate-800 hover:border-slate-700'
+    }`;
+    div.onclick = async () => {
+      const sel = document.getElementById('businessSelect');
+      if (sel) {
+        sel.value = item.biz;
+        await onBusinessChange(item.biz);
+      }
+      const qInput = document.getElementById('questionInput');
+      if (qInput) qInput.value = item.q;
+      const asOf = document.getElementById('asOfDate');
+      if (asOf) asOf.value = item.date;
+
+      const modal = document.getElementById('checklistModal');
+      if (modal) modal.classList.add('hidden');
+
+      testedCases.add(item.id);
+      renderChecklist();
+      await ask();
+    };
+
+    div.innerHTML = `
+      <div class="flex items-center gap-3">
+        <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+          isDone ? 'bg-purple-500 text-white font-bold' : 'bg-slate-800 text-slate-500'
+        }">
+          ${isDone ? '<i class="fa-solid fa-check text-[10px]"></i>' : '<i class="fa-solid fa-play text-[9px]"></i>'}
+        </div>
+        <div>
+          <div class="text-xs font-semibold text-white flex items-center gap-2">
+            <span class="font-mono text-purple-400">${item.id}</span>
+            <span>${item.q}</span>
+          </div>
+          <div class="text-[11px] text-slate-400 mt-0.5">${item.desc} • ${item.biz}</div>
+        </div>
+      </div>
+      <button class="text-xs px-2.5 py-1 rounded bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700">Chạy Test</button>
+    `;
+    container.appendChild(div);
+  });
+}
+
 function setupEvents() {
   const sel = document.getElementById('businessSelect');
   if (sel) sel.onchange = (e) => onBusinessChange(e.target.value);
+
   const closeBtn = document.getElementById('closeModalBtn');
   if (closeBtn) closeBtn.onclick = () => {
     const modal = document.getElementById('tableModal');
     if (modal) modal.classList.add('hidden');
   };
+
+  const chkBtn = document.getElementById('qaChecklistBtn');
+  if (chkBtn) chkBtn.onclick = () => {
+    const modal = document.getElementById('checklistModal');
+    if (modal) modal.classList.remove('hidden');
+  };
+
+  const closeChkBtn = document.getElementById('closeChecklistBtn');
+  if (closeChkBtn) closeChkBtn.onclick = () => {
+    const modal = document.getElementById('checklistModal');
+    if (modal) modal.classList.add('hidden');
+  };
+
   const askBtn = document.getElementById('askBtn');
   if (askBtn) askBtn.onclick = ask;
+
   const qInput = document.getElementById('questionInput');
   if (qInput) {
     qInput.addEventListener('keydown', (e) => {
@@ -174,6 +259,7 @@ function setupEvents() {
       }
     });
   }
+
   const copyBtn = document.getElementById('copySqlBtn');
   if (copyBtn) {
     copyBtn.onclick = () => {
@@ -260,14 +346,35 @@ function renderResult(data) {
     }
   }
 
+  // Vietnamese NLU Preprocessing Info
+  const nlpDiv = document.getElementById('nlpInfo');
+  if (nlpDiv && data.nlp) {
+    const flags = [];
+    if (data.nlp.is_quantity_query) flags.push('<span class="bg-blue-500/20 text-blue-300 px-1 py-0.5 rounded text-[10px]">Quantity</span>');
+    if (data.nlp.is_revenue_query) flags.push('<span class="bg-emerald-500/20 text-emerald-300 px-1 py-0.5 rounded text-[10px]">Revenue</span>');
+    if (data.nlp.is_profit_cost_query) flags.push('<span class="bg-amber-500/20 text-amber-300 px-1 py-0.5 rounded text-[10px]">Profit/Cost</span>');
+    if (data.nlp.is_expiration_query) flags.push('<span class="bg-rose-500/20 text-rose-300 px-1 py-0.5 rounded text-[10px]">Expiry</span>');
+    if (data.nlp.is_stock_query) flags.push('<span class="bg-indigo-500/20 text-indigo-300 px-1 py-0.5 rounded text-[10px]">Stock</span>');
+    if (data.nlp.is_why_causal) flags.push('<span class="bg-red-500/20 text-red-300 px-1 py-0.5 rounded text-[10px]">Why/Causal</span>');
+    if (data.nlp.is_future) flags.push('<span class="bg-purple-500/20 text-purple-300 px-1 py-0.5 rounded text-[10px]">Future</span>');
+    if (data.nlp.is_ambiguous_time) flags.push('<span class="bg-slate-500/20 text-slate-300 px-1 py-0.5 rounded text-[10px]">Ambiguous Time</span>');
+
+    nlpDiv.innerHTML = `
+      <div><strong class="text-slate-400">Chuẩn hóa:</strong> <span class="text-teal-300">"${data.nlp.clean_query}"</span></div>
+      <div class="mt-1 flex flex-wrap gap-1">${flags.join(' ') || '<span class="text-slate-500">Mặc định</span>'}</div>
+    `;
+  }
+
   const tempDiv = document.getElementById('temporalInfo');
   if (tempDiv) {
     if (data.temporal) {
       const monthPart = data.temporal.target_month ? `<div><strong class="text-slate-400">Tháng:</strong> ${data.temporal.target_month}</div>` : '';
+      const ambPart = data.temporal.is_ambiguous ? `<div class="text-amber-400 text-[11px]"><i class="fa-solid fa-triangle-exclamation"></i> Thời gian mơ hồ (bữa giờ)</div>` : '';
       tempDiv.innerHTML = `
-        <div><strong class="text-slate-400">Từ ngày:</strong> ${data.temporal.start_date}</div>
-        <div><strong class="text-slate-400">Đến ngày:</strong> ${data.temporal.end_date}</div>
+        <div><strong class="text-slate-400">Từ ngày:</strong> ${data.temporal.start_date || '--'}</div>
+        <div><strong class="text-slate-400">Đến ngày:</strong> ${data.temporal.end_date || '--'}</div>
         ${monthPart}
+        ${ambPart}
       `;
     } else {
       tempDiv.innerHTML = '<p class="text-slate-500 italic">Không có mốc thời gian cụ thể</p>';
@@ -278,7 +385,7 @@ function renderResult(data) {
   if (planDiv) {
     const unansReason = data.plan.unanswerable_reason ? `<div class="text-amber-400 text-[11px] mt-1"><i class="fa-solid fa-circle-info"></i> ${data.plan.unanswerable_reason}</div>` : '';
     planDiv.innerHTML = `
-      <div><strong class="text-slate-400">Ý định (Intent):</strong> <span class="text-indigo-400 font-mono">${data.plan.intent}</span></div>
+      <div><strong class="text-slate-400">Ý định:</strong> <span class="text-indigo-400 font-mono">${data.plan.intent}</span></div>
       <div><strong class="text-slate-400">Độ tin cậy:</strong> ${(data.plan.confidence * 100).toFixed(0)}%</div>
       ${unansReason}
     `;

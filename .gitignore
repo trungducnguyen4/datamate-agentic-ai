@@ -37,3 +37,7 @@ tmp/
 # OS
 .DS_Store
 Thumbs.db
+
+# Large Datasets (>100MB, generated on demand via scripts/generate_5m_dataset.py)
+datamate_vietnamese_qa_5m.csv
+*.csv.gz

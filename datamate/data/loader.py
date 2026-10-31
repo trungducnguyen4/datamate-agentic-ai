@@ -99,7 +99,7 @@ class BusinessDataLoader:
             print(f"Warning: Failed to load SQLite {fpath}: {e}")
 
     def _save_df_to_sqlite(self, df: pd.DataFrame, table_name: str) -> None:
-        if df.empty:
+        if df.empty and len(df.columns) == 0:
             return
 
         orig_cols = list(df.columns)
