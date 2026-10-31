@@ -1,0 +1,26 @@
+# DataMate — Git Flow & Commit Convention (ExamTrust Protocol)
+
+## 1. Commit Message Convention
+Mọi commit bắt buộc tuân theo quy chuẩn:
+`<type>(<scope>): <Mô tả ngắn gọn> [DM-xxx]`
+
+Trong đó:
+- `DM-xxx`: Mã định danh issue / task (ví dụ: `[DM-001]`, `[DM-002]`,...)
+- `type`:
+  - `feat`: Thêm tính năng mới (models, parser, loader, compiler, engine, cli,...)
+  - `fix`: Sửa lỗi logic, xử lý ngoại lệ, vá regex/schema
+  - `test`: Thêm hoặc cập nhật unit tests, integration tests
+  - `perf`: Tối ưu hóa hiệu năng truy vấn, caching, giảm latency
+  - `refactor`: Tái cấu trúc code không làm đổi hành vi
+  - `docs`: Tài liệu, guideline, notebook giải thích
+  - `chore`: Cấu hình môi trường, dependencies, scripts
+- `scope`: `(core)`, `(loader)`, `(temporal)`, `(engine)`, `(eval)`, `(cli)`, `(data)`
+
+## 2. Verification Protocol — Báo cáo xác minh 3-Trụ-Cột
+Mỗi bước hoàn thiện hoặc commit giải pháp cần báo cáo:
+1. **🧪 Tests**: Kết quả chạy test tự động (`pytest`).
+2. **⚡ Runtime**: Kiểm tra thực thi trên dữ liệu thực tế / mock data.
+3. **🎯 Confidence**: Đánh giá mức độ tin cậy (High / Medium / Low).
+
+## 3. Git Automation Permission
+AI Agent được phép chủ động tạo nhánh, commit code theo quy chuẩn mà không cần xác nhận thủ công cho từng lệnh nhỏ, đảm bảo tốc độ triển khai liên tục và nhất quán.

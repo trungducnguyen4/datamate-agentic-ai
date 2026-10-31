@@ -1,0 +1,27 @@
+{
+  "description": {
+    "error_message": "Invalid Request",
+    "data": null,
+    "error_code": -10
+  },
+  "evaluationMetric": {
+    "error_message": "Invalid Request",
+    "data": null,
+    "error_code": -10
+  },
+  "dataExam": {
+    "error_message": "Invalid Request",
+    "data": null,
+    "error_code": -10
+  },
+  "rule": {
+    "error_message": "Invalid Request",
+    "data": null,
+    "error_code": -10
+  },
+  "submissionGuidance": {
+    "error_message": "Invalid Request",
+    "data": null,
+    "error_code": -10
+  }
+}
