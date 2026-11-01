@@ -10,6 +10,7 @@ from datamate.data.schema_inspector import SchemaInspector
 from datamate.data.union_view import ensure_sales_union
 from datamate.engine.executor import SafeSQLExecutor
 from datamate.engine.rule_compiler import BusinessRuleCompiler, CompiledQueryPlan
+from datamate.temporal.resolver import TemporalResolver
 
 logger = logging.getLogger("datamate.agent")
 
@@ -122,9 +123,10 @@ class DataMateAgent:
                 return SubmissionItem(id=item.id, type=AnswerType.ABSTAIN), trace
 
             phase = "COMPILER"
+            norm_as_of = TemporalResolver.normalize_as_of_date_str(item.as_of_date) if item.as_of_date else "2026-03-04"
             plan: CompiledQueryPlan = BusinessRuleCompiler.compile(
                 question=item.question,
-                as_of_date_str=item.as_of_date,
+                as_of_date_str=norm_as_of,
                 tables=tables,
             )
             trace.intent = plan.intent

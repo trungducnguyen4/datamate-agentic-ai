@@ -1,9 +1,9 @@
 from __future__ import annotations
 import calendar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 import re
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from datamate.data.calendar import get_festival_solar_date, get_lunar_range
 from datamate.data.calendar_csv import get_calendar
 
@@ -15,6 +15,7 @@ class DateRange:
     target_month: Optional[str] = None  # YYYY-MM if asking about a specific month
     is_exact_day: bool = False
     is_ambiguous: bool = False
+    candidate_months: List[str] = field(default_factory=list)
 
 
 class TemporalResolver:
@@ -29,7 +30,87 @@ class TemporalResolver:
 
     @staticmethod
     def parse_as_of_date(as_of_date_str: str) -> date:
-        return datetime.strptime(as_of_date_str.strip(), "%Y-%m-%d").date()
+        """Parse as_of_date defensively from multiple date formats (ISO, VN DD/MM/YYYY, etc.)."""
+        if not as_of_date_str:
+            return date(2026, 3, 4)
+        s = str(as_of_date_str).strip()
+        # 1. Standard ISO YYYY-MM-DD or YYYY/MM/DD
+        m_iso = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", s)
+        if m_iso:
+            return date(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)))
+        # 2. Vietnamese DD/MM/YYYY or DD-MM-YYYY
+        m_vn = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$", s)
+        if m_vn:
+            d, m, y = int(m_vn.group(1)), int(m_vn.group(2)), int(m_vn.group(3))
+            if m > 12 and d <= 12:  # Swap if MM/DD/YYYY
+                d, m = m, d
+            return date(y, m, d)
+        # 3. Fallback formats
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        return date(2026, 3, 4)
+
+    @classmethod
+    def normalize_as_of_date_str(cls, as_of_date_str: str) -> str:
+        d = cls.parse_as_of_date(as_of_date_str)
+        return d.isoformat()
+
+    @staticmethod
+    def extract_candidate_months(query: str) -> List[str]:
+        """Extract multi-month tokens or ranges from a Vietnamese query (e.g. 3/25, 4/25, 5/25 -> ['2025-03', '2025-04', '2025-05'])."""
+        q_norm = query.lower()
+        months = set()
+        # Pattern 1: M/YYYY or M/YY (e.g. 3/25, 4/25, 11/2025)
+        for m in re.finditer(r"(?:tháng\s*|th\s*|t\s*)?(\d{1,2})/(\d{2,4})", q_norm):
+            month = int(m.group(1))
+            year = int(m.group(2))
+            if year < 100:
+                year += 2000
+            if 1 <= month <= 12:
+                months.add(f"{year:04d}-{month:02d}")
+        # Pattern 2: Series like th2, th3, th4/2026 or tháng 1, 2, 3/2026
+        m_series = re.search(r"(?:th|t|tháng\s*)(\d{1,2})\s*,\s*(?:th|t|tháng\s*)?(\d{1,2})\s*(?:và|,|hay)?\s*(?:th|t|tháng\s*)?(\d{1,2})[/-](\d{2,4})", q_norm)
+        if m_series:
+            y = int(m_series.group(4))
+            if y < 100:
+                y += 2000
+            for g in range(1, 4):
+                months.add(f"{y:04d}-{int(m_series.group(g)):02d}")
+        # Pattern 3: Explicit 'tháng X năm Y'
+        for m in re.finditer(r"tháng\s*(\d{1,2})\s*năm\s*(\d{4})", q_norm):
+            months.add(f"{int(m.group(2)):04d}-{int(m.group(1)):02d}")
+        # Pattern 4: Ranges like 'từ th12/2025 đến th2/2026' or 'từ tháng 8/2025 tới tháng 10/2025'
+        m_range = re.search(r"(?:từ|tu)\s*(?:tháng\s*|th\s*|t\s*)?(\d{1,2})[/-](\d{2,4})\s*(?:tới|đến|toi|den)\s*(?:tháng\s*|th\s*|t\s*)?(\d{1,2})[/-](\d{2,4})", q_norm)
+        if m_range:
+            m1, y1 = int(m_range.group(1)), int(m_range.group(2))
+            m2, y2 = int(m_range.group(3)), int(m_range.group(4))
+            if y1 < 100:
+                y1 += 2000
+            if y2 < 100:
+                y2 += 2000
+            cy, cm = y1, m1
+            while (cy < y2) or (cy == y2 and cm <= m2):
+                months.add(f"{cy:04d}-{cm:02d}")
+                cm += 1
+                if cm > 12:
+                    cm = 1
+                    cy += 1
+        # If 2 months and range connector
+        if len(months) == 2 and any(k in q_norm for k in ["tới", "đến", "toi", "den"]):
+            m_list = sorted(list(months))
+            y1, m1 = map(int, m_list[0].split("-"))
+            y2, m2 = map(int, m_list[1].split("-"))
+            cy, cm = y1, m1
+            while (cy < y2) or (cy == y2 and cm <= m2):
+                months.add(f"{cy:04d}-{cm:02d}")
+                cm += 1
+                if cm > 12:
+                    cm = 1
+                    cy += 1
+        return sorted(list(months))
 
     @staticmethod
     def _tet_year(query: str, default_year: int) -> int:
@@ -186,6 +267,20 @@ class TemporalResolver:
                 is_exact_day=True,
             )
 
+        # 6b. Multi-month extraction or Short Month Formats (e.g. 3/25, 4/25, 5/25, th7/2025, 8/2025)
+        cand_months = cls.extract_candidate_months(q)
+        if len(cand_months) >= 2:
+            m_first = cand_months[0]
+            m_last = cand_months[-1]
+            y_first, m_f_num = map(int, m_first.split("-"))
+            y_last, m_l_num = map(int, m_last.split("-"))
+            last_day = calendar.monthrange(y_last, m_l_num)[1]
+            return DateRange(
+                start_date=f"{y_first:04d}-{m_f_num:02d}-01",
+                end_date=f"{y_last:04d}-{m_l_num:02d}-{last_day:02d}",
+                candidate_months=cand_months,
+            )
+
         # 7. Specific YYYY-MM format in query (e.g., "tháng 3 năm 2026", "tháng 03/2026", "thang 4/2025")
         month_match = re.search(r"(?:tháng|thang)\s*(\d{1,2})(?:[\s/,-]+(?:năm|nam)?\s*|\/)(\d{4})", q)
         if month_match:
@@ -198,6 +293,16 @@ class TemporalResolver:
                     end_date=f"{y:04d}-{m:02d}-{last_day:02d}",
                     target_month=f"{y:04d}-{m:02d}",
                 )
+
+        if len(cand_months) == 1:
+            m_single = cand_months[0]
+            y_s, m_s = map(int, m_single.split("-"))
+            last_day = calendar.monthrange(y_s, m_s)[1]
+            return DateRange(
+                start_date=f"{y_s:04d}-{m_s:02d}-01",
+                end_date=f"{y_s:04d}-{m_s:02d}-{last_day:02d}",
+                target_month=f"{y_s:04d}-{m_s:02d}",
+            )
 
         # 7b. Quarter: "Quý 1", "quý 2", "quý 3", "quý 4", "quy 4/2025", "quý 4 năm 2025", "quý 4 năm ngoái"
         quarter_match = re.search(r"(?:quý|quy)\s*([1-4]|i{1,3}|iv)(?:[\s/,-]*(?:năm|nam)?\s*(\d{4}))?", q)

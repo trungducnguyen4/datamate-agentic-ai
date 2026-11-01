@@ -174,8 +174,21 @@ def _ensure_indexes(conn: sqlite3.Connection, tables: Dict[str, TableInfo]) -> N
     conn.commit()
 
 
+def _materialize(conn: sqlite3.Connection, select_sql: str) -> None:
+    """Vật chất hoá union thành bảng thật + index (nhanh hơn quét view mỗi câu)."""
+    conn.execute(f"DROP VIEW IF EXISTS `{UNIFIED_VIEW}`")
+    conn.execute(f"DROP TABLE IF EXISTS `{UNIFIED_VIEW}`")
+    conn.execute(f"CREATE TABLE `{UNIFIED_VIEW}` AS {select_sql}")
+    for column in ("ngay", "ten_san_pham", "trang_thai", "ma_hoa_don"):
+        conn.execute(
+            f'CREATE INDEX IF NOT EXISTS "idx_unified_{column}" '
+            f'ON `{UNIFIED_VIEW}`(`{column}`)'
+        )
+    conn.commit()
+
+
 def build_sales_union(conn: sqlite3.Connection, tables: Dict[str, TableInfo]) -> Optional[str]:
-    """Tạo `_sales_unified` nếu gộp được nhiều bảng fact bán hàng.
+    """Tạo bảng `_sales_unified` nếu gộp được nhiều bảng fact bán hàng.
 
     Ưu tiên 2 kiểu dữ liệu phổ biến của DataMate:
     1. Nhiều bảng dòng hàng chia theo tháng/quý/năm (UNION ALL).
@@ -200,10 +213,8 @@ def build_sales_union(conn: sqlite3.Connection, tables: Dict[str, TableInfo]) ->
             best = members
 
     if best:
-        conn.execute(f"DROP VIEW IF EXISTS `{UNIFIED_VIEW}`")
         selects = [_select_for_table(name, mapping) for name, _, mapping in best]
-        conn.execute(f"CREATE VIEW `{UNIFIED_VIEW}` AS " + " UNION ALL ".join(selects))
-        conn.commit()
+        _materialize(conn, " UNION ALL ".join(selects))
         return UNIFIED_VIEW
 
     return _build_header_detail_union(conn, tables)
@@ -315,8 +326,7 @@ def _build_header_detail_union(conn: sqlite3.Connection, tables: Dict[str, Table
             f"{_expr(mapping.get('discount'), 'giam_gia', 'REAL')} FROM `{name}`"
         )
 
-    sql = (
-        f"CREATE VIEW `{UNIFIED_VIEW}` AS "
+    select_sql = (
         f"SELECT h.ngay AS ngay, d.ten_san_pham AS ten_san_pham, "
         f"d.ma_san_pham AS ma_san_pham, d.so_luong AS so_luong, "
         f"d.thanh_tien AS thanh_tien, h.trang_thai AS trang_thai, "
@@ -326,9 +336,7 @@ def _build_header_detail_union(conn: sqlite3.Connection, tables: Dict[str, Table
         f"JOIN ({' UNION ALL '.join(header_selects)}) h "
         f"ON d.ma_hoa_don = h.ma_hoa_don"
     )
-    conn.execute(f"DROP VIEW IF EXISTS `{UNIFIED_VIEW}`")
-    conn.execute(sql)
-    conn.commit()
+    _materialize(conn, select_sql)
     return UNIFIED_VIEW
 
 

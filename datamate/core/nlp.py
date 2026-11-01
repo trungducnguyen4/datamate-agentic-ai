@@ -59,6 +59,7 @@ class NormalizedQueryInfo:
     is_table_query: bool = False
     category_filter: Optional[str] = None
     metric_target: Optional[str] = None
+    candidate_months: List[str] = field(default_factory=list)
 
 
 class VietnameseNLP:
@@ -440,7 +441,14 @@ class VietnameseNLP:
 
         # Date & Month selection queries (AnswerType.DATE)
         is_which_day_query = bool(re.search(r"\b(ngày nào|ngay nao|hạn dùng ngày nào|hạn sử dụng ngày nào|vào ngày nào)\b", q))
-        is_which_month_query = bool(re.search(r"\b(tháng nào|thang nao|vào tháng nào|trong tháng nào)\b", q)) and not is_which_day_query
+        is_which_month_query = bool(re.search(r"\b(tháng nào|thang nao|vào tháng nào|trong tháng nào|tháng mô|thang mo)\b", q)) and not is_which_day_query
+        if is_which_day_query or is_which_month_query:
+            is_revenue_ranking = False
+            is_quantity_ranking = False
+            is_lowest_ranking = False
+
+        from datamate.temporal.resolver import TemporalResolver
+        candidate_months = TemporalResolver.extract_candidate_months(q)
 
         # Consecutive Growth boolean query (e.g. Doanh thu 3 tháng có tăng liên tục không?)
         is_consecutive_growth_query = bool(
@@ -567,4 +575,5 @@ class VietnameseNLP:
             is_table_query=is_table_query,
             category_filter=category_filter,
             metric_target=metric_target,
+            candidate_months=candidate_months,
         )

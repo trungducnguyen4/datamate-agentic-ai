@@ -226,7 +226,7 @@ class BusinessRuleCompiler:
                 else:
                     clauses.append(f"DATE(`{date_col}`) >= '{time_range.start_date}' AND DATE(`{date_col}`) <= '{time_range.end_date}'")
             if prod_name_col:
-                clauses.append(f"LOWER(`{prod_name_col}`) NOT LIKE '%phí phục vụ%'")
+                clauses.append(f"(`{prod_name_col}` IS NULL OR LOWER(`{prod_name_col}`) NOT LIKE '%phí phục vụ%')")
 
             if sales_table and nlp_info.category_filter:
                 cat_col = next((c.name for c in tables[sales_table].columns if c.semantic_role == "category" or any(k in c.name.lower() for k in ["loai", "nhom", "cat"])), None)
@@ -488,7 +488,51 @@ class BusinessRuleCompiler:
                 sql = f"SELECT ROUND(COALESCE(SUM({target_expr}), 0), 2) FROM `{sales_table}` {where_str};"
                 return CompiledQueryPlan(intent="product_quantity", expected_type=AnswerType.NUMBER, sql=sql.strip())
 
-        # 16. Intent: Product Ranking by REVENUE (SEM-02 / SEM-08 / BM_FORMAL_01)
+        # 16a. Intent: Which Day Query (AnswerType.DATE)
+        if nlp_info.is_which_day_query:
+            if not sales_table or not date_col:
+                return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.UNANSWERABLE)
+            metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
+            where_str = build_where_clause()
+            sql = f"""
+            SELECT DATE(`{date_col}`)
+            FROM `{sales_table}`
+            {where_str}
+            GROUP BY DATE(`{date_col}`)
+            ORDER BY SUM({metric}) DESC, DATE(`{date_col}`) ASC
+            LIMIT 1;
+            """
+            return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.DATE, sql=sql.strip(), confidence=0.96)
+
+        # 16b. Intent: Which Month Query (AnswerType.DATE)
+        if nlp_info.is_which_month_query:
+            if not sales_table or not date_col:
+                return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.UNANSWERABLE)
+            metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
+            clauses = []
+            if nlp_info.candidate_months:
+                months_in = ", ".join(f"'{m}'" for m in nlp_info.candidate_months)
+                clauses.append(f"SUBSTR(DATE(`{date_col}`), 1, 7) IN ({months_in})")
+            elif time_range and time_range.start_date and time_range.end_date:
+                clauses.append(f"DATE(`{date_col}`) BETWEEN '{time_range.start_date}' AND '{time_range.end_date}'")
+            if status_col:
+                clauses.append(f"(`{status_col}` IS NULL OR (`{status_col}` NOT LIKE '%trả hàng%' AND `{status_col}` NOT LIKE '%đổi trả%' AND `{status_col}` NOT LIKE '%hoàn trả%' AND `{status_col}` NOT LIKE '%hủy%' AND `{status_col}` NOT LIKE '%huỷ%'))")
+            if prod_name_col:
+                clauses.append(f"(`{prod_name_col}` IS NULL OR LOWER(`{prod_name_col}`) NOT LIKE '%phí phục vụ%')")
+            if as_of_date_str:
+                clauses.append(f"DATE(`{date_col}`) <= '{as_of_date_str}'")
+            where_str = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            sql = f"""
+            SELECT SUBSTR(DATE(`{date_col}`), 1, 7)
+            FROM `{sales_table}`
+            {where_str}
+            GROUP BY SUBSTR(DATE(`{date_col}`), 1, 7)
+            ORDER BY SUM({metric}) DESC, SUBSTR(DATE(`{date_col}`), 1, 7) ASC
+            LIMIT 1;
+            """
+            return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.DATE, sql=sql.strip(), confidence=0.96)
+
+        # 16c. Intent: Product Ranking by REVENUE (SEM-02 / SEM-08 / BM_FORMAL_01)
         if nlp_info.is_revenue_ranking or (nlp_info.is_revenue_query and nlp_info.is_lowest_ranking):
             if not sales_table or not prod_name_col or not amount_expr:
                 return CompiledQueryPlan(intent="ranking_product_revenue", expected_type=AnswerType.UNANSWERABLE)
@@ -550,38 +594,6 @@ class BusinessRuleCompiler:
                 sql=sql.strip(),
                 confidence=0.96,
             )
-
-        # 17b. Intent: Which Day Query (AnswerType.DATE)
-        if nlp_info.is_which_day_query:
-            if not sales_table or not date_col:
-                return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.UNANSWERABLE)
-            metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
-            where_str = build_where_clause()
-            sql = f"""
-            SELECT DATE(`{date_col}`)
-            FROM `{sales_table}`
-            {where_str}
-            GROUP BY DATE(`{date_col}`)
-            ORDER BY SUM({metric}) DESC, DATE(`{date_col}`) ASC
-            LIMIT 1;
-            """
-            return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.DATE, sql=sql.strip(), confidence=0.96)
-
-        # 17c. Intent: Which Month Query (AnswerType.DATE)
-        if nlp_info.is_which_month_query:
-            if not sales_table or not date_col:
-                return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.UNANSWERABLE)
-            metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
-            where_str = build_where_clause()
-            sql = f"""
-            SELECT SUBSTR(DATE(`{date_col}`), 1, 7)
-            FROM `{sales_table}`
-            {where_str}
-            GROUP BY SUBSTR(DATE(`{date_col}`), 1, 7)
-            ORDER BY SUM({metric}) DESC, SUBSTR(DATE(`{date_col}`), 1, 7) ASC
-            LIMIT 1;
-            """
-            return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.DATE, sql=sql.strip(), confidence=0.96)
 
         # 17d. Intent: Cancellation Rate (Rule 18: AnswerType.PERCENT)
         if nlp_info.is_cancellation_rate_query:
@@ -716,7 +728,8 @@ class BusinessRuleCompiler:
                 if any(k in name_lower for k in ["ma", "code", "id"]):
                     prod_code_col = c.name
                 else:
-                    prod_name_col = c.name
+                    if not prod_name_col or any(k in name_lower for k in ["ten_sp", "ten_san_pham", "ten_hang_hoa", "ten_mon", "ten_thuoc"]):
+                        prod_name_col = c.name
             elif c.semantic_role == "order_id" or any(k in name_lower for k in ["ma_don", "ma_hd", "ma_hoa_don", "hoa_don", "order_id", "invoice_id", "so_hd", "so_don"]):
                 order_id_col = c.name
             elif any(k in name_lower for k in ["giam_gia", "chiet_khau", "discount"]):

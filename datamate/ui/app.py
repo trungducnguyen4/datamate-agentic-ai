@@ -146,70 +146,90 @@ def get_business_tables(biz_id: str, dataset: str = "public_test"):
 @app.post("/api/ask")
 def ask_question(req: AskRequest):
     t_start = time.time()
-    agent_inst = get_agent(req.dataset)
+    try:
+        req.as_of_date = TemporalResolver.normalize_as_of_date_str(req.as_of_date)
+        agent_inst = get_agent(req.dataset)
 
-    q_item = QuestionItem(
-        id=f"q_{int(time.time() * 1000)}",
-        business_id=req.business_id,
-        question=req.question,
-        as_of_date=req.as_of_date,
-    )
+        q_item = QuestionItem(
+            id=f"q_{int(time.time() * 1000)}",
+            business_id=req.business_id,
+            question=req.question,
+            as_of_date=req.as_of_date,
+        )
 
-    # 1. NLP Analysis
-    nlp_info = VietnameseNLP.process_query(req.question)
+        # 1. NLP Analysis
+        nlp_info = VietnameseNLP.process_query(req.question)
 
-    # 2. Resolve temporal
-    temp_range = TemporalResolver.resolve(nlp_info.clean_query, req.as_of_date)
-    if not temp_range:
-        temp_range = TemporalResolver.resolve(req.question, req.as_of_date)
+        # 2. Resolve temporal
+        temp_range = TemporalResolver.resolve(nlp_info.clean_query, req.as_of_date)
+        if not temp_range:
+            temp_range = TemporalResolver.resolve(req.question, req.as_of_date)
 
-    temp_info = (
-        {
-            "start_date": temp_range.start_date,
-            "end_date": temp_range.end_date,
-            "target_month": temp_range.target_month,
-            "is_exact_day": temp_range.is_exact_day,
-            "is_ambiguous": temp_range.is_ambiguous,
+        temp_info = (
+            {
+                "start_date": temp_range.start_date,
+                "end_date": temp_range.end_date,
+                "target_month": temp_range.target_month,
+                "is_exact_day": temp_range.is_exact_day,
+                "is_ambiguous": temp_range.is_ambiguous,
+                "candidate_months": getattr(temp_range, "candidate_months", []),
+            }
+            if temp_range
+            else None
+        )
+
+        # 3. Get business schema
+        loader = agent_inst.get_or_load_business(req.business_id)
+        tables = agent_inst.get_tables(req.business_id, loader.conn)
+
+        # 4. Plan compilation
+        plan = BusinessRuleCompiler.compile(req.question, req.as_of_date, tables)
+
+        # 5. Agent answer
+        sub_item = agent_inst.answer_question(q_item)
+        latency_ms = round((time.time() - t_start) * 1000, 2)
+
+        return {
+            "submission": sub_item.to_dict(),
+            "temporal": temp_info,
+            "nlp": {
+                "clean_query": nlp_info.clean_query,
+                "is_quantity_query": nlp_info.is_quantity_query,
+                "is_revenue_query": nlp_info.is_revenue_query,
+                "is_profit_cost_query": nlp_info.is_profit_cost_query,
+                "is_expiration_query": nlp_info.is_expiration_query,
+                "is_stock_query": nlp_info.is_stock_query,
+                "is_why_causal": nlp_info.is_why_causal,
+                "is_future": nlp_info.is_future,
+                "is_ambiguous_time": nlp_info.is_ambiguous_time,
+            },
+            "plan": {
+                "intent": plan.intent,
+                "expected_type": plan.expected_type.value,
+                "sql": plan.sql,
+                "confidence": plan.confidence,
+                "unanswerable_reason": plan.unanswerable_reason,
+            },
+            "trace": agent_inst.last_trace.model_dump() if agent_inst.last_trace else None,
+            "latency_ms": latency_ms,
         }
-        if temp_range
-        else None
-    )
-
-    # 3. Get business schema
-    loader = agent_inst.get_or_load_business(req.business_id)
-    tables = agent_inst.get_tables(req.business_id, loader.conn)
-
-    # 4. Plan compilation
-    plan = BusinessRuleCompiler.compile(req.question, req.as_of_date, tables)
-
-    # 5. Agent answer
-    sub_item = agent_inst.answer_question(q_item)
-    latency_ms = round((time.time() - t_start) * 1000, 2)
-
-    return {
-        "submission": sub_item.to_dict(),
-        "temporal": temp_info,
-        "nlp": {
-            "clean_query": nlp_info.clean_query,
-            "is_quantity_query": nlp_info.is_quantity_query,
-            "is_revenue_query": nlp_info.is_revenue_query,
-            "is_profit_cost_query": nlp_info.is_profit_cost_query,
-            "is_expiration_query": nlp_info.is_expiration_query,
-            "is_stock_query": nlp_info.is_stock_query,
-            "is_why_causal": nlp_info.is_why_causal,
-            "is_future": nlp_info.is_future,
-            "is_ambiguous_time": nlp_info.is_ambiguous_time,
-        },
-        "plan": {
-            "intent": plan.intent,
-            "expected_type": plan.expected_type.value,
-            "sql": plan.sql,
-            "confidence": plan.confidence,
-            "unanswerable_reason": plan.unanswerable_reason,
-        },
-        "trace": agent_inst.last_trace.model_dump() if agent_inst.last_trace else None,
-        "latency_ms": latency_ms,
-    }
+    except Exception as e:
+        logger.exception("Error during /api/ask execution")
+        latency_ms = round((time.time() - t_start) * 1000, 2)
+        return {
+            "submission": {"id": req.business_id, "type": "abstain", "answer": None},
+            "temporal": None,
+            "nlp": {"clean_query": req.question, "error": str(e)},
+            "plan": {
+                "intent": "error_fallback",
+                "expected_type": "abstain",
+                "sql": f"-- Lỗi xử lý an toàn: {e}",
+                "confidence": 0.0,
+                "unanswerable_reason": str(e),
+            },
+            "trace": None,
+            "latency_ms": latency_ms,
+        }
 
 
 PRIORITY_QA_CASES = [
