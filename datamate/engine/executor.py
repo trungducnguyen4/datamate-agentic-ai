@@ -72,6 +72,13 @@ class SafeSQLExecutor:
             if re.search(rf"\b{kw}\b", clean_sql, re.IGNORECASE):
                 raise SQLSecurityError(f"Dangerous keyword detected: {kw}")
 
+        # Register Unicode-aware LOWER and UPPER functions for Vietnamese text
+        try:
+            conn.create_function("lower", 1, lambda s: str(s).lower() if s is not None else None)
+            conn.create_function("upper", 1, lambda s: str(s).upper() if s is not None else None)
+        except Exception:
+            pass
+
         # Enforce read-only at database level
         try:
             conn.execute("PRAGMA query_only = ON;")

@@ -94,12 +94,34 @@ def _product_columns(info: TableInfo) -> Tuple[Optional[str], Optional[str]]:
     return name_column, code_column
 
 
+def _pick_date_column(info: TableInfo) -> Optional[str]:
+    """Chọn cột ngày tốt nhất khi bảng có nhiều cột role 'date'."""
+    date_cols = [c for c in info.columns if c.semantic_role == "date"]
+    if not date_cols:
+        return None
+    if len(date_cols) == 1:
+        return date_cols[0].name
+    # Ưu tiên cột có mẫu giá trị thực sự chứa YYYY-MM-DD
+    for c in date_cols:
+        for s in c.sample_values:
+            if isinstance(s, str) and len(s) >= 10 and s[4] == "-" and s[7] == "-":
+                return c.name
+    # Ưu tiên tên chứa 'ngay' hơn 'gio'
+    for c in date_cols:
+        if "ngay" in c.name.lower():
+            return c.name
+    return date_cols[0].name
+
+
 def _role_columns(info: TableInfo) -> Dict[str, str]:
     mapping: Dict[str, str] = {}
     for column in info.columns:
         role = column.semantic_role
         if role and role in CANON_ROLES and role not in mapping:
             mapping[role] = column.name
+    date_col = _pick_date_column(info)
+    if date_col:
+        mapping["date"] = date_col
     name, code = _product_columns(info)
     if name:
         mapping["product"] = name

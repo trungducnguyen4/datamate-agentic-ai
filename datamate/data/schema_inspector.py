@@ -45,7 +45,7 @@ class SchemaInspector:
 
     CUSTOMER_KEYWORDS = ["khach_hang", "khach", "customer", "client", "nguoi_mua", "ten_khach_hang", "benh_nhan", "doi_tac"]
     DEBT_KEYWORDS = ["cong_no", "tong_no", "con_no", "so_no", "tien_no", "debt", "chua_tra", "no_phai_tra"]
-    DATE_KEYWORDS = ["ngay", "date", "created", "time", "thoi_gian", "order_date"]
+    DATE_KEYWORDS = ["ngay", "date", "created", "time", "thoi_gian", "order_date", "gio"]
     STATUS_KEYWORDS = ["trang_thai", "status", "state", "tinh_trang", "ket_qua"]
     TOTAL_AMOUNT_KEYWORDS = ["thanh_tien", "tong_tien", "doanh_thu", "total_amount", "amount", "subtotal", "tong", "tri_gia"]
     QUANTITY_KEYWORDS = ["so_luong", "quantity", "qty", "sl", "quy_ra_dv_le", "so_luong_quy_doi", "so_luong_giao"]
@@ -67,8 +67,12 @@ class SchemaInspector:
     CATEGORY_KEYWORDS = ["loai", "loai_hang", "nhom", "nhom_hang", "nganh_hang", "category", "phan_loai"]
     ADJUSTMENT_KEYWORDS = {
         "khach_tra": "customer_payment",
+        "khach_da_tra": "customer_payment",
         "khach_phai_tra": "customer_payment",
         "tien_khach_tra": "customer_payment",
+        "da_tra": "customer_payment",
+        "con_phai_thu": "customer_payment",
+        "phai_thu": "customer_payment",
         "thu_may_cu": "trade_in_amount",
         "thu_cu": "trade_in_amount",
         "bot": "discount_amount",
@@ -304,11 +308,13 @@ class SchemaInspector:
 
     @classmethod
     def _infer_role(cls, col_name: str, samples: List[Any]) -> Optional[str]:
-        clean_name = strip_accents(col_name)
+        clean_name = strip_accents(col_name).lower()
+        compact_name = re.sub(r"[^a-z0-9]", "", clean_name)
 
-        # 0. Adjustments & specific payments (e.g. khach_tra, thu_may_cu, bot)
+        # 0. Adjustments & specific payments (e.g. khach_tra, khachdatra, thu_may_cu, bot)
         for kw, role in cls.ADJUSTMENT_KEYWORDS.items():
-            if kw == clean_name or kw in clean_name:
+            kw_compact = re.sub(r"[^a-z0-9]", "", kw)
+            if kw == clean_name or kw in clean_name or kw_compact == compact_name or kw_compact in compact_name:
                 return role
 
         # 1. Order ID
@@ -398,7 +404,7 @@ class SchemaInspector:
 
         # Check sample values for date patterns
         for s in samples:
-            if isinstance(s, str) and (len(s) == 10 and s[4] == "-" and s[7] == "-"):
+            if isinstance(s, str) and (len(s) >= 10 and s[4] == "-" and s[7] == "-"):
                 return "date"
 
         return None

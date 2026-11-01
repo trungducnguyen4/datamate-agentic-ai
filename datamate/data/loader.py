@@ -68,6 +68,18 @@ def clean_dataframe_vectorized(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     for col in df.columns:
+        col_lower = str(col).lower()
+        is_date_named = any(k in col_lower for k in ["ngay", "thoi_gian", "date", "time", "hsd", "exp"])
+        is_amount_named = any(k in col_lower for k in ["tien", "gia", "amount", "sl", "so_luong", "don_gia", "thanh_tien", "chiet_khau"])
+
+        # Check numeric Excel serial date (e.g. 40000 to 55000 corresponding to years 2010 to 2050)
+        if pd.api.types.is_numeric_dtype(df[col]):
+            valid = df[col].dropna()
+            if len(valid) > 0 and ((valid >= 40000) & (valid <= 55000)).mean() > 0.8:
+                if is_date_named or not is_amount_named:
+                    df[col] = pd.to_datetime(df[col], unit="D", origin="1899-12-30", errors="coerce").dt.strftime("%Y-%m-%d")
+                    continue
+
         if df[col].dtype == object:
             # Check non-null values
             s = df[col].dropna().astype(str).str.strip()
@@ -75,6 +87,15 @@ def clean_dataframe_vectorized(df: pd.DataFrame) -> pd.DataFrame:
                 continue
 
             first_val = s.iloc[0]
+
+            # Excel serial number stored as string
+            numeric_s = pd.to_numeric(s, errors="coerce")
+            if numeric_s.notna().sum() > len(s) * 0.8:
+                valid = numeric_s.dropna()
+                if len(valid) > 0 and ((valid >= 40000) & (valid <= 55000)).mean() > 0.8:
+                    if is_date_named or not is_amount_named:
+                        df[col] = pd.to_datetime(numeric_s, unit="D", origin="1899-12-30", errors="coerce").dt.strftime("%Y-%m-%d")
+                        continue
 
             # 0. Ngày ở nhiều định dạng trộn lẫn (Excel hay trộn '01/01/2026' với
             #    '2025-03-01' và '9 thg 8 2026'). Chuẩn hoá theo TỪNG giá trị nếu có dấu hiệu ngày.
@@ -171,6 +192,7 @@ class BusinessDataLoader:
         """Scan directory and load all data files."""
         if not os.path.exists(self.business_dir):
             self.conn = sqlite3.connect(":memory:")
+            self._setup_conn()
             return self
 
         # Read README.md if present
@@ -188,6 +210,7 @@ class BusinessDataLoader:
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
                 self.table_names = [r[0] for r in cursor.fetchall()]
                 if len(self.table_names) >= expected_tables > 0:
+                    self._setup_conn()
                     return self
                 # Cache dở dang (bị kill giữa chừng) → xoá và build lại
                 self.conn.close()
@@ -237,7 +260,16 @@ class BusinessDataLoader:
                 else:
                     self.conn = sqlite3.connect(":memory:")
 
+        self._setup_conn()
         return self
+
+    def _setup_conn(self) -> None:
+        if self.conn is not None:
+            try:
+                self.conn.create_function("lower", 1, lambda s: str(s).lower() if s is not None else None)
+                self.conn.create_function("upper", 1, lambda s: str(s).upper() if s is not None else None)
+            except Exception:
+                pass
 
     def _count_source_files(self) -> int:
         try:

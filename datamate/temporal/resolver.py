@@ -500,4 +500,30 @@ class TemporalResolver:
             prev_range = DateRange(start_date=prev_start, end_date=prev_end)
             return cur_range, prev_range
 
+        # Specific month comparison: e.g. "tháng 2/2026 so cùng kỳ năm trước" or "03/2025 so với tháng liền trước"
+        m_match = re.search(r"(?:tháng|th|t)\s*(\d{1,2})(?:[\/\-\s]|(?:\s*năm\s*))(\d{2,4})", q)
+        if m_match:
+            tgt_m = int(m_match.group(1))
+            tgt_y = int(m_match.group(2))
+            if tgt_y < 100:
+                tgt_y += 2000
+            if 1 <= tgt_m <= 12 and 2000 <= tgt_y <= 2030:
+                last_d = calendar.monthrange(tgt_y, tgt_m)[1]
+                cur_range = DateRange(start_date=f"{tgt_y:04d}-{tgt_m:02d}-01", end_date=f"{tgt_y:04d}-{tgt_m:02d}-{last_d:02d}")
+
+                # Compare vs previous year (cùng kỳ năm ngoái / cùng kỳ năm trước / năm rồi)
+                if any(w in q for w in ["năm ngoái", "nam ngoai", "năm trước", "nam truoc", "năm rồi", "nam roi", "cùng tháng năm", "cung thang nam"]):
+                    prev_y = tgt_y - 1
+                    prev_last_d = calendar.monthrange(prev_y, tgt_m)[1]
+                    prev_range = DateRange(start_date=f"{prev_y:04d}-{tgt_m:02d}-01", end_date=f"{prev_y:04d}-{tgt_m:02d}-{prev_last_d:02d}")
+                    return cur_range, prev_range
+
+                # Compare vs previous month (tháng trước / tháng liền trước)
+                if any(w in q for w in ["tháng trước", "thang truoc", "tháng liền trước", "thang lien truoc", "tháng rồi", "thang roi"]):
+                    prev_y = tgt_y if tgt_m > 1 else tgt_y - 1
+                    prev_m = tgt_m - 1 if tgt_m > 1 else 12
+                    prev_last_d = calendar.monthrange(prev_y, prev_m)[1]
+                    prev_range = DateRange(start_date=f"{prev_y:04d}-{prev_m:02d}-01", end_date=f"{prev_y:04d}-{prev_m:02d}-{prev_last_d:02d}")
+                    return cur_range, prev_range
+
         return None
