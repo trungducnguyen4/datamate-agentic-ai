@@ -34,6 +34,8 @@ class BusinessRuleCompiler:
         question: str,
         as_of_date_str: str,
         tables: Dict[str, TableInfo],
+        rulebook: Optional[Any] = None,
+        readme_text: str = "",
     ) -> CompiledQueryPlan:
         # 1. Process query with Vietnamese NLP engine
         nlp_info = VietnameseNLP.process_query(question)
@@ -208,9 +210,10 @@ class BusinessRuleCompiler:
             if nlp_info.is_quantity_ranking or nlp_info.is_revenue_ranking:
                 return CompiledQueryPlan(intent="empty_table_ranking", expected_type=AnswerType.ABSTAIN)
 
-        # Helper to construct WHERE clause
-        def build_where_clause(include_status: bool = True, custom_prod: Optional[str] = None) -> str:
+        # Helper to construct WHERE clause and parameter list
+        def build_where_clause(include_status: bool = True, custom_prod: Optional[str] = None) -> Tuple[str, List[Any]]:
             clauses = []
+            params: List[Any] = []
             if include_status and status_col:
                 clauses.append(
                     f"(`{status_col}` IS NULL OR ("
@@ -222,9 +225,11 @@ class BusinessRuleCompiler:
                 )
             if time_range and date_col:
                 if time_range.is_exact_day:
-                    clauses.append(f"DATE(`{date_col}`) = '{time_range.start_date}'")
+                    clauses.append(f"DATE(`{date_col}`) = ?")
+                    params.append(time_range.start_date)
                 else:
-                    clauses.append(f"DATE(`{date_col}`) >= '{time_range.start_date}' AND DATE(`{date_col}`) <= '{time_range.end_date}'")
+                    clauses.append(f"DATE(`{date_col}`) >= ? AND DATE(`{date_col}`) <= ?")
+                    params.extend([time_range.start_date, time_range.end_date])
             if prod_name_col:
                 clauses.append(f"(`{prod_name_col}` IS NULL OR LOWER(`{prod_name_col}`) NOT LIKE '%phí phục vụ%')")
 
@@ -236,24 +241,32 @@ class BusinessRuleCompiler:
                     elif prod_name_col:
                         clauses.append(f"LOWER(`{prod_name_col}`) NOT LIKE '%phụ kiện%' AND LOWER(`{prod_name_col}`) NOT LIKE '%phu kien%'")
                 elif cat_col:
-                    clauses.append(f"LOWER(`{cat_col}`) LIKE '%{nlp_info.category_filter.lower()}%'")
+                    clauses.append(f"LOWER(`{cat_col}`) LIKE ?")
+                    params.append(f"%{nlp_info.category_filter.lower()}%")
                 elif prod_name_col:
-                    clauses.append(f"LOWER(`{prod_name_col}`) LIKE '%{nlp_info.category_filter.lower()}%'")
+                    clauses.append(f"LOWER(`{prod_name_col}`) LIKE ?")
+                    params.append(f"%{nlp_info.category_filter.lower()}%")
 
             if custom_prod:
                 if prod_code_col and "sp_" in custom_prod.lower():
-                    clauses.append(f"LOWER(`{prod_code_col}`) = '{custom_prod.lower()}'")
+                    clauses.append(f"LOWER(`{prod_code_col}`) = ?")
+                    params.append(custom_prod.lower())
                 elif prod_name_col:
-                    clauses.append(f"LOWER(`{prod_name_col}`) LIKE '%{custom_prod.lower()}%'")
+                    clauses.append(f"LOWER(`{prod_name_col}`) LIKE ?")
+                    params.append(f"%{custom_prod.lower()}%")
             elif nlp_info.has_specific_product:
                 p = nlp_info.has_specific_product.lower()
                 if prod_code_col and "sp_" in p:
-                    clauses.append(f"LOWER(`{prod_code_col}`) = '{p}'")
+                    clauses.append(f"LOWER(`{prod_code_col}`) = ?")
+                    params.append(p)
                 elif prod_name_col:
-                    clauses.append(f"LOWER(`{prod_name_col}`) LIKE '%{p}%'")
+                    clauses.append(f"LOWER(`{prod_name_col}`) LIKE ?")
+                    params.append(f"%{p}%")
             if nlp_info.has_specific_order and order_id_col:
-                clauses.append(f"UPPER(`{order_id_col}`) = '{nlp_info.has_specific_order}'")
-            return f"WHERE {' AND '.join(clauses)}" if clauses else ""
+                clauses.append(f"UPPER(`{order_id_col}`) = ?")
+                params.append(nlp_info.has_specific_order.upper())
+            where_str = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            return where_str, params
 
         # 6. Intent: Boolean / Zero / Negative Checks
         if nlp_info.is_zero_value_query:
@@ -271,7 +284,7 @@ class BusinessRuleCompiler:
         if nlp_info.is_success_rate_query:
             if not sales_table or not status_col:
                 return CompiledQueryPlan(intent="success_rate", expected_type=AnswerType.UNANSWERABLE)
-            where_str = build_where_clause(include_status=False)
+            where_str, params = build_where_clause(include_status=False)
             sql = f"""
             SELECT ROUND(
                 100.0 * SUM(CASE WHEN `{status_col}` NOT LIKE '%hủy%' AND `{status_col}` NOT LIKE '%cancel%' THEN 1 ELSE 0 END)
@@ -279,13 +292,16 @@ class BusinessRuleCompiler:
                 2
             ) FROM `{sales_table}` {where_str};
             """
-            return CompiledQueryPlan(intent="success_rate", expected_type=AnswerType.PERCENT, sql=sql.strip())
+            return CompiledQueryPlan(intent="success_rate", expected_type=AnswerType.PERCENT, sql=sql.strip(), params=tuple(params))
 
         if nlp_info.is_special_char_query:
             if not sales_table or not prod_name_col or not amount_expr:
                 return CompiledQueryPlan(intent="special_char_sales", expected_type=AnswerType.UNANSWERABLE)
-            sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` WHERE `{prod_name_col}` GLOB '*[0-9]*' OR `{prod_name_col}` LIKE '%4 lớp%';"
-            return CompiledQueryPlan(intent="special_char_sales", expected_type=AnswerType.NUMBER, sql=sql.strip())
+            where_str, params = build_where_clause()
+            cond = f"(`{prod_name_col}` GLOB '*[0-9]*' OR `{prod_name_col}` GLOB '*[%@#&+/()_-]*')"
+            where_full = f"{where_str} AND {cond}" if where_str else f"WHERE {cond}"
+            sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` {where_full};"
+            return CompiledQueryPlan(intent="special_char_sales", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
 
         # 7. Intent: Specific Order lookup (e.g. "Đơn hàng mã HD07 có giá trị bao nhiêu tiền?")
         if nlp_info.has_specific_order and (nlp_info.is_revenue_query or "giá trị" in clean_q or "bao nhiêu" in clean_q):
@@ -316,11 +332,11 @@ class BusinessRuleCompiler:
             if not sales_table or not status_col:
                 return CompiledQueryPlan(intent="cancellation", expected_type=AnswerType.UNANSWERABLE)
 
-            where_str = build_where_clause(include_status=False)
+            where_str, params = build_where_clause(include_status=False)
             if nlp_info.is_canceled_revenue_query:
                 where_clause = f"{where_str} AND (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')" if where_str else f"WHERE (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')"
                 sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` {where_clause};"
-                return CompiledQueryPlan(intent="canceled_revenue", expected_type=AnswerType.NUMBER, sql=sql.strip())
+                return CompiledQueryPlan(intent="canceled_revenue", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
             elif any(w in clean_q for w in ["tỷ lệ", "phần trăm", "phan tram"]):
                 sql = f"""
                 SELECT ROUND(
@@ -329,11 +345,15 @@ class BusinessRuleCompiler:
                     2
                 ) FROM `{sales_table}` {where_str};
                 """
-                return CompiledQueryPlan(intent="cancel_rate", expected_type=AnswerType.PERCENT, sql=sql.strip())
+                return CompiledQueryPlan(intent="cancel_rate", expected_type=AnswerType.PERCENT, sql=sql.strip(), params=tuple(params))
+            elif bool(re.search(r"\b(có|co)\b.*\b(không|khong)\b", clean_q.rstrip("?").strip())) and not any(w in clean_q for w in ["bao nhiêu", "mấy", "số đơn", "bn", "nhiêu"]):
+                where_cancel = f"{where_str} AND (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')" if where_str else f"WHERE (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')"
+                sql = f"SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END FROM `{sales_table}` {where_cancel};"
+                return CompiledQueryPlan(intent="cancel_boolean", expected_type=AnswerType.BOOLEAN, sql=sql.strip(), params=tuple(params))
             else:
                 where_cancel = f"{where_str} AND (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')" if where_str else f"WHERE (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')"
                 sql = f"SELECT COUNT(*) FROM `{sales_table}` {where_cancel};"
-                return CompiledQueryPlan(intent="cancel_count", expected_type=AnswerType.NUMBER, sql=sql.strip())
+                return CompiledQueryPlan(intent="cancel_count", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
 
         # 10. Intent: Debts
         if nlp_info.is_debt_query and not nlp_info.is_debt_duration_query:
@@ -342,11 +362,11 @@ class BusinessRuleCompiler:
 
             where_pos = f"WHERE `{debt_amount_col}` > 0"
             if nlp_info.debt_above is not None:
-                sql = f"SELECT DISTINCT `{debt_cust_col}` FROM `{debt_table}` WHERE `{debt_amount_col}` > {nlp_info.debt_above} ORDER BY `{debt_cust_col}` ASC;"
-                return CompiledQueryPlan(intent="debt_above", expected_type=AnswerType.LIST, sql=sql.strip())
+                sql = f"SELECT DISTINCT `{debt_cust_col}` FROM `{debt_table}` WHERE `{debt_amount_col}` > ? ORDER BY `{debt_cust_col}` ASC;"
+                return CompiledQueryPlan(intent="debt_above", expected_type=AnswerType.LIST, sql=sql.strip(), params=(float(nlp_info.debt_above),))
             elif nlp_info.debt_below is not None:
-                sql = f"SELECT DISTINCT `{debt_cust_col}` FROM `{debt_table}` WHERE `{debt_amount_col}` > 0 AND `{debt_amount_col}` < {nlp_info.debt_below} ORDER BY `{debt_cust_col}` ASC;"
-                return CompiledQueryPlan(intent="debt_below", expected_type=AnswerType.LIST, sql=sql.strip())
+                sql = f"SELECT DISTINCT `{debt_cust_col}` FROM `{debt_table}` WHERE `{debt_amount_col}` > 0 AND `{debt_amount_col}` < ? ORDER BY `{debt_cust_col}` ASC;"
+                return CompiledQueryPlan(intent="debt_below", expected_type=AnswerType.LIST, sql=sql.strip(), params=(float(nlp_info.debt_below),))
             elif nlp_info.is_debt_highest:
                 sql = f"SELECT `{debt_cust_col}` FROM `{debt_table}` ORDER BY `{debt_amount_col}` DESC LIMIT 1;"
                 return CompiledQueryPlan(intent="debt_highest", expected_type=AnswerType.LIST, sql=sql.strip())
@@ -370,86 +390,98 @@ class BusinessRuleCompiler:
         if nlp_info.is_order_max_query:
             if not sales_table or not amount_expr:
                 return CompiledQueryPlan(intent="order_max", expected_type=AnswerType.UNANSWERABLE)
-            where_str = build_where_clause()
-            # If asking specifically about amount/value:
+            where_str, params = build_where_clause()
             if any(w in clean_q for w in ["trị giá bao nhiêu", "bao nhiêu tiền"]) or bool(re.search(r"giá trị.*cao nhất.*bao nhiêu", clean_q)):
                 sql = f"SELECT ROUND(COALESCE(MAX({amount_expr}), 0), 2) FROM `{sales_table}` {where_str};"
-                return CompiledQueryPlan(intent="order_max_value", expected_type=AnswerType.NUMBER, sql=sql.strip())
+                return CompiledQueryPlan(intent="order_max_value", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
             else:
                 target_col = f"`{order_id_col}`" if order_id_col else amount_expr
                 res_type = AnswerType.STRING if order_id_col else AnswerType.NUMBER
                 sql = f"SELECT {target_col} FROM `{sales_table}` {where_str} ORDER BY {amount_expr} DESC LIMIT 1;"
-                return CompiledQueryPlan(intent="order_max", expected_type=res_type, sql=sql.strip())
+                return CompiledQueryPlan(intent="order_max", expected_type=res_type, sql=sql.strip(), params=tuple(params))
 
         if nlp_info.is_order_min_query:
             if not sales_table or not amount_expr:
                 return CompiledQueryPlan(intent="order_min", expected_type=AnswerType.UNANSWERABLE)
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             if any(w in clean_q for w in ["trị giá bao nhiêu", "bao nhiêu tiền", "là bao nhiêu"]):
                 sql = f"SELECT ROUND(COALESCE(MIN({amount_expr}), 0), 2) FROM `{sales_table}` {where_str};"
-                return CompiledQueryPlan(intent="order_min_value", expected_type=AnswerType.NUMBER, sql=sql.strip())
+                return CompiledQueryPlan(intent="order_min_value", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
             else:
                 target_col = f"`{order_id_col}`" if order_id_col else amount_expr
                 res_type = AnswerType.STRING if order_id_col else AnswerType.NUMBER
                 sql = f"SELECT {target_col} FROM `{sales_table}` {where_str} ORDER BY {amount_expr} ASC LIMIT 1;"
-                return CompiledQueryPlan(intent="order_min", expected_type=res_type, sql=sql.strip())
+                return CompiledQueryPlan(intent="order_min", expected_type=res_type, sql=sql.strip(), params=tuple(params))
 
         # 11b. Intent: Average per order queries (BM_AGG_01, BM_AGG_05)
         if nlp_info.is_avg_order_revenue_query:
             if not sales_table or not amount_expr:
                 return CompiledQueryPlan(intent="avg_order_revenue", expected_type=AnswerType.UNANSWERABLE)
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             order_div = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
             sql = f"SELECT ROUND(SUM({amount_expr}) * 1.0 / NULLIF({order_div}, 0), 2) FROM `{sales_table}` {where_str};"
-            return CompiledQueryPlan(intent="avg_order_revenue", expected_type=AnswerType.NUMBER, sql=sql.strip())
+            return CompiledQueryPlan(intent="avg_order_revenue", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
 
         if nlp_info.is_avg_order_qty_query:
             if not sales_table or not qty_col:
                 return CompiledQueryPlan(intent="avg_order_qty", expected_type=AnswerType.UNANSWERABLE)
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             order_div = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
             sql = f"SELECT ROUND(SUM(`{qty_col}`) * 1.0 / NULLIF({order_div}, 0), 2) FROM `{sales_table}` {where_str};"
-            return CompiledQueryPlan(intent="avg_order_qty", expected_type=AnswerType.NUMBER, sql=sql.strip())
+            return CompiledQueryPlan(intent="avg_order_qty", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
 
         # 12. Intent: Distinct products count (BM_MULTI_20)
         if nlp_info.is_distinct_product_query:
             if not sales_table or not prod_name_col:
                 return CompiledQueryPlan(intent="distinct_products", expected_type=AnswerType.UNANSWERABLE)
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             sql = f"SELECT COUNT(DISTINCT `{prod_name_col}`) FROM `{sales_table}` {where_str};"
-            return CompiledQueryPlan(intent="distinct_products", expected_type=AnswerType.NUMBER, sql=sql.strip())
+            return CompiledQueryPlan(intent="distinct_products", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
 
         # 13. Intent: Order count (SEM-10: Tháng này bán được bao nhiêu đơn?)
         if nlp_info.is_order_count_query:
             if not sales_table:
                 return CompiledQueryPlan(intent="order_count", expected_type=AnswerType.UNANSWERABLE)
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             if order_id_col:
                 sql = f"SELECT COUNT(DISTINCT `{order_id_col}`) FROM `{sales_table}` {where_str};"
             else:
                 sql = f"SELECT COUNT(*) FROM `{sales_table}` {where_str};"
-            return CompiledQueryPlan(intent="order_count", expected_type=AnswerType.NUMBER, sql=sql.strip())
+            return CompiledQueryPlan(intent="order_count", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
 
-        # 13. Intent: Best customer / Top buyer (SEM-05 / Rule 48: Đơn khách lẻ không tính)
+        # 13b. Intent: Best customer / Top buyer (SEM-05 / Rule 48: Đơn khách lẻ không tính)
         if nlp_info.is_customer_query:
             if not sales_table or not cust_col:
                 return CompiledQueryPlan(intent="top_customer", expected_type=AnswerType.UNANSWERABLE, unanswerable_reason="Missing customer column in sales data.")
-            where_str = build_where_clause()
-            if any(w in clean_q for w in ["nhiều đơn", "số đơn", "nhiều đơn nhất", "nhiều lần mua"]):
+            where_str, params = build_where_clause()
+
+            # Rulebook §3: "Khách trung thành nhất: khách có nhiều ngày có mua nhất trong kỳ"
+            if any(w in clean_q for w in ["trung thành", "trung thanh", "thường xuyên"]):
+                sum_expr = f"COUNT(DISTINCT DATE(`{date_col}`))" if date_col else "COUNT(*)"
+            # Rulebook §3: "Khách sộp nhất: khách có giá trị trung bình một đơn cao nhất trong kỳ (từ 2 đơn trở lên)"
+            elif any(w in clean_q for w in ["sộp", "sop", "chịu chi", "chiu chi"]):
+                sum_expr = f"SUM({amount_expr}) * 1.0 / NULLIF(COUNT(DISTINCT `{order_id_col}`), 0)" if order_id_col else f"AVG({amount_expr})"
+            # Rulebook §3: "Khách hay đổi ý nhất: khách có nhiều đơn huỷ nhất trong kỳ"
+            elif any(w in clean_q for w in ["đổi ý", "doi y", "hủy nhiều", "huỷ nhiều"]):
+                sum_expr = f"COUNT(DISTINCT CASE WHEN LOWER(`{status_col}`) LIKE '%hủy%' OR LOWER(`{status_col}`) LIKE '%cancel%' THEN `{order_id_col}` END)" if (status_col and order_id_col) else "COUNT(*)"
+            elif any(w in clean_q for w in ["nhiều đơn", "số đơn", "nhiều đơn nhất", "nhiều lần mua"]):
                 sum_expr = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
             else:
                 sum_expr = amount_expr if amount_expr else (f"SUM(`{qty_col}`)" if qty_col else "COUNT(*)")
+
             no_retail = f"(LOWER(TRIM(`{cust_col}`)) NOT IN ('lẻ', 'le', 'kl', 'khách lẻ', 'khach le', 'khách vãng lai', 'khach vang lai', 'vãng lai', 'vang lai', '') AND LOWER(`{cust_col}`) NOT LIKE '%khách lẻ%' AND LOWER(`{cust_col}`) NOT LIKE '%khach le%' AND LOWER(`{cust_col}`) NOT LIKE '%vãng lai%')"
             where_join = f"{where_str} AND `{cust_col}` IS NOT NULL AND {no_retail}" if where_str else f"WHERE `{cust_col}` IS NOT NULL AND {no_retail}"
+            having_clause = f"HAVING COUNT(DISTINCT `{order_id_col}`) >= 2" if any(w in clean_q for w in ["sộp", "sop"]) and order_id_col else ""
             sql = f"""
             SELECT `{cust_col}`
             FROM `{sales_table}`
             {where_join}
             GROUP BY `{cust_col}`
+            {having_clause}
             ORDER BY {sum_expr} DESC
             LIMIT 1;
             """
-            return CompiledQueryPlan(intent="top_customer", expected_type=AnswerType.STRING, sql=sql.strip())
+            return CompiledQueryPlan(intent="top_customer", expected_type=AnswerType.STRING, sql=sql.strip(), params=tuple(params))
 
         # 14. Intent: Unsold products check (Grounded against Catalog and Sales)
         if nlp_info.is_unsold_query:
@@ -465,13 +497,23 @@ class BusinessRuleCompiler:
                     unanswerable_reason="Chỉ có bảng giao dịch, thiếu bảng danh mục sản phẩm (catalog) hoặc kho để đối chiếu sản phẩm chưa bán."
                 )
 
-            where_str = build_where_clause()
-            sales_subquery = f"SELECT DISTINCT `{prod_name_col}` FROM `{sales_table}` {where_str}" if prod_name_col else f"SELECT DISTINCT 1 FROM `{sales_table}`"
-            sql = f"SELECT CASE WHEN EXISTS (SELECT 1 FROM `{catalog_tbl}` WHERE `{catalog_prod_col}` NOT IN ({sales_subquery})) THEN 1 ELSE 0 END;"
+            where_str, params = build_where_clause()
+            sql = f"""
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM `{catalog_tbl}` c
+                WHERE c.`{catalog_prod_col}` IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM `{sales_table}` s
+                      {where_str}
+                      AND s.`{prod_name_col}` = c.`{catalog_prod_col}`
+                  )
+            ) THEN 1 ELSE 0 END;
+            """
             return CompiledQueryPlan(
                 intent="unsold_check",
                 expected_type=AnswerType.BOOLEAN,
                 sql=sql.strip(),
+                params=tuple(params),
                 confidence=0.92,
             )
 
@@ -479,30 +521,33 @@ class BusinessRuleCompiler:
         if nlp_info.has_specific_product and not nlp_info.is_revenue_ranking and not nlp_info.is_quantity_ranking:
             if not sales_table:
                 return CompiledQueryPlan(intent="product_metric", expected_type=AnswerType.UNANSWERABLE)
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             if nlp_info.is_revenue_query:
                 sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` {where_str};"
-                return CompiledQueryPlan(intent="product_revenue", expected_type=AnswerType.NUMBER, sql=sql.strip())
+                return CompiledQueryPlan(intent="product_revenue", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
             else:
                 target_expr = f"`{qty_col}`" if qty_col else amount_expr
                 sql = f"SELECT ROUND(COALESCE(SUM({target_expr}), 0), 2) FROM `{sales_table}` {where_str};"
-                return CompiledQueryPlan(intent="product_quantity", expected_type=AnswerType.NUMBER, sql=sql.strip())
+                return CompiledQueryPlan(intent="product_quantity", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
 
         # 16a. Intent: Which Day Query (AnswerType.DATE)
-        if nlp_info.is_which_day_query:
+        if nlp_info.is_which_day_query or any(w in clean_q for w in ["ngày đắt khách", "ngay dat khach", "ngày đông khách", "ngay dong khach"]):
             if not sales_table or not date_col:
                 return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.UNANSWERABLE)
-            metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
+            if any(w in clean_q for w in ["đắt khách", "dat khach", "đông khách", "dong khach", "nhiều đơn nhất"]):
+                metric = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
+            else:
+                metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
             sql = f"""
             SELECT DATE(`{date_col}`)
             FROM `{sales_table}`
             {where_str}
             GROUP BY DATE(`{date_col}`)
-            ORDER BY SUM({metric}) DESC, DATE(`{date_col}`) ASC
+            ORDER BY {metric} DESC, DATE(`{date_col}`) ASC
             LIMIT 1;
             """
-            return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.DATE, sql=sql.strip(), confidence=0.96)
+            return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.DATE, sql=sql.strip(), params=tuple(params), confidence=0.96)
 
         # 16b. Intent: Which Month Query (AnswerType.DATE)
         if nlp_info.is_which_month_query:
@@ -510,17 +555,21 @@ class BusinessRuleCompiler:
                 return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.UNANSWERABLE)
             metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
             clauses = []
+            params = []
             if nlp_info.candidate_months:
-                months_in = ", ".join(f"'{m}'" for m in nlp_info.candidate_months)
-                clauses.append(f"SUBSTR(DATE(`{date_col}`), 1, 7) IN ({months_in})")
+                placeholders = ", ".join(["?"] * len(nlp_info.candidate_months))
+                clauses.append(f"SUBSTR(DATE(`{date_col}`), 1, 7) IN ({placeholders})")
+                params.extend(nlp_info.candidate_months)
             elif time_range and time_range.start_date and time_range.end_date:
-                clauses.append(f"DATE(`{date_col}`) BETWEEN '{time_range.start_date}' AND '{time_range.end_date}'")
+                clauses.append(f"DATE(`{date_col}`) BETWEEN ? AND ?")
+                params.extend([time_range.start_date, time_range.end_date])
             if status_col:
                 clauses.append(f"(`{status_col}` IS NULL OR (`{status_col}` NOT LIKE '%trả hàng%' AND `{status_col}` NOT LIKE '%đổi trả%' AND `{status_col}` NOT LIKE '%hoàn trả%' AND `{status_col}` NOT LIKE '%hủy%' AND `{status_col}` NOT LIKE '%huỷ%'))")
             if prod_name_col:
                 clauses.append(f"(`{prod_name_col}` IS NULL OR LOWER(`{prod_name_col}`) NOT LIKE '%phí phục vụ%')")
             if as_of_date_str:
-                clauses.append(f"DATE(`{date_col}`) <= '{as_of_date_str}'")
+                clauses.append(f"DATE(`{date_col}`) <= ?")
+                params.append(as_of_date_str)
             where_str = f"WHERE {' AND '.join(clauses)}" if clauses else ""
             sql = f"""
             SELECT SUBSTR(DATE(`{date_col}`), 1, 7)
@@ -530,14 +579,14 @@ class BusinessRuleCompiler:
             ORDER BY SUM({metric}) DESC, SUBSTR(DATE(`{date_col}`), 1, 7) ASC
             LIMIT 1;
             """
-            return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.DATE, sql=sql.strip(), confidence=0.96)
+            return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.DATE, sql=sql.strip(), params=tuple(params), confidence=0.96)
 
         # 16c. Intent: Product Ranking by REVENUE (SEM-02 / SEM-08 / BM_FORMAL_01)
         if nlp_info.is_revenue_ranking or (nlp_info.is_revenue_query and nlp_info.is_lowest_ranking):
             if not sales_table or not prod_name_col or not amount_expr:
                 return CompiledQueryPlan(intent="ranking_product_revenue", expected_type=AnswerType.UNANSWERABLE)
 
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             order_dir = "ASC" if nlp_info.is_lowest_ranking else "DESC"
             group_expr = f"`{prod_name_col}`, `{prod_code_col}`" if prod_code_col else f"`{prod_name_col}`"
             tie_breaker = f", `{prod_code_col}` ASC" if prod_code_col else f", `{prod_name_col}` ASC"
@@ -556,6 +605,7 @@ class BusinessRuleCompiler:
                 intent="ranking_product_revenue",
                 expected_type=exp_type,
                 sql=sql.strip(),
+                params=tuple(params),
                 confidence=0.96,
             )
 
@@ -564,11 +614,14 @@ class BusinessRuleCompiler:
             if not sales_table or not prod_name_col:
                 return CompiledQueryPlan(intent="ranking_product_quantity", expected_type=AnswerType.UNANSWERABLE)
 
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             order_dir = "ASC" if nlp_info.is_lowest_ranking else "DESC"
 
-            # Check if query asks specifically about buyers (người mua / khách mua)
-            if any(w in clean_q for w in ["người mua", "khách mua", "nguoi mua", "khach mua"]) and cust_col:
+            # Check if query asks specifically about popular products in orders (Mặt hàng được ưa chuộng nhất)
+            if any(w in clean_q for w in ["ưa chuộng", "ua chuong", "được chuộng", "pho bien nhất", "phổ biến nhất"]) and order_id_col:
+                sum_target = f"COUNT(DISTINCT `{order_id_col}`)"
+                secondary_sort = f", SUM(`{qty_col}`) {order_dir}" if qty_col else ""
+            elif any(w in clean_q for w in ["người mua", "khách mua", "nguoi mua", "khach mua"]) and cust_col:
                 sum_target = f"COUNT(DISTINCT `{cust_col}`)"
                 secondary_sort = f", SUM(`{qty_col}`) {order_dir}" if qty_col else ""
             else:
@@ -592,6 +645,7 @@ class BusinessRuleCompiler:
                 intent="ranking_product_quantity",
                 expected_type=exp_type,
                 sql=sql.strip(),
+                params=tuple(params),
                 confidence=0.96,
             )
 
@@ -599,7 +653,7 @@ class BusinessRuleCompiler:
         if nlp_info.is_cancellation_rate_query:
             if not sales_table or not status_col:
                 return CompiledQueryPlan(intent="cancellation_rate", expected_type=AnswerType.UNANSWERABLE)
-            where_str = build_where_clause(include_status=False)
+            where_str, params = build_where_clause(include_status=False)
             id_expr = f"`{order_id_col}`" if order_id_col else "*"
             sql = f"""
             SELECT ROUND(
@@ -610,46 +664,84 @@ class BusinessRuleCompiler:
             FROM `{sales_table}`
             {where_str};
             """
-            return CompiledQueryPlan(intent="cancellation_rate", expected_type=AnswerType.PERCENT, sql=sql.strip(), confidence=0.95)
+            return CompiledQueryPlan(intent="cancellation_rate", expected_type=AnswerType.PERCENT, sql=sql.strip(), params=tuple(params), confidence=0.95)
 
-        # 17e. Intent: Specific Column Target (e.g. thu_may_cu, khach_tra, bot)
+        # 17e. Intent: Revenue Growth / Percentage Change (Rulebook §1 Rule 19: AnswerType.PERCENT)
+        is_growth_query = any(w in clean_q for w in ["tăng trưởng", "tang truong", "tăng bao nhiêu %", "tang bao nhieu %", "giảm bao nhiêu %", "giam bao nhieu %", "thay đổi bao nhiêu %", "phần trăm thay đổi", "phan tram thay doi"])
+        if is_growth_query and sales_table and date_col and amount_expr:
+            periods = TemporalResolver.resolve_comparison_periods(clean_q, as_of_date_str)
+            if periods:
+                cur_p, prev_p = periods
+                status_clause = f"(`{status_col}` IS NULL OR (`{status_col}` NOT LIKE '%hủy%' AND `{status_col}` NOT LIKE '%cancel%' AND `{status_col}` NOT LIKE '%trả hàng%'))" if status_col else "1=1"
+                sql = f"""
+                WITH cur AS (
+                    SELECT COALESCE(SUM({amount_expr}), 0.0) AS val
+                    FROM `{sales_table}`
+                    WHERE DATE(`{date_col}`) >= ? AND DATE(`{date_col}`) <= ? AND {status_clause}
+                ),
+                prev AS (
+                    SELECT COALESCE(SUM({amount_expr}), 0.0) AS val
+                    FROM `{sales_table}`
+                    WHERE DATE(`{date_col}`) >= ? AND DATE(`{date_col}`) <= ? AND {status_clause}
+                )
+                SELECT ROUND(100.0 * (cur.val - prev.val) / NULLIF(prev.val, 0), 2)
+                FROM cur, prev;
+                """
+                growth_params = (cur_p.start_date, cur_p.end_date, prev_p.start_date, prev_p.end_date)
+                return CompiledQueryPlan(intent="growth_rate", expected_type=AnswerType.PERCENT, sql=sql.strip(), params=growth_params, confidence=0.95)
+
+        # 17f. Intent: Specific Column Target (e.g. thu_may_cu, khach_tra, bot)
         if nlp_info.metric_target and sales_table:
             matched_col = next((c.name for c in tables[sales_table].columns if nlp_info.metric_target in c.name.lower()), None)
             if matched_col:
-                where_str = build_where_clause()
+                where_str, params = build_where_clause()
                 sql = f"SELECT ROUND(COALESCE(SUM(`{matched_col}`), 0), 2) FROM `{sales_table}` {where_str};"
-                return CompiledQueryPlan(intent=f"metric_{nlp_info.metric_target}", expected_type=AnswerType.NUMBER, sql=sql.strip(), confidence=0.96)
+                return CompiledQueryPlan(intent=f"metric_{nlp_info.metric_target}", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params), confidence=0.96)
 
-        # 17f. Intent: Debt Table (AnswerType.TABLE)
-        if nlp_info.is_table_query and debt_table and debt_cust_col and debt_amount_col:
+        # 17g. Intent: Table output (AnswerType.TABLE)
+        if nlp_info.is_table_query:
             k = nlp_info.top_k or 5
-            sql = f"""
-            SELECT `{debt_cust_col}` AS khach_hang, ROUND(`{debt_amount_col}`) AS so_tien_no
-            FROM `{debt_table}`
-            WHERE `{debt_amount_col}` > 0
-            ORDER BY `{debt_amount_col}` DESC
-            LIMIT {k};
-            """
-            return CompiledQueryPlan(intent="debt_table", expected_type=AnswerType.TABLE, sql=sql.strip(), confidence=0.95)
+            if nlp_info.is_debt_query and debt_table and debt_cust_col and debt_amount_col:
+                sql = f"""
+                SELECT `{debt_cust_col}` AS khach_hang, ROUND(`{debt_amount_col}`) AS so_tien_no
+                FROM `{debt_table}`
+                WHERE `{debt_amount_col}` > 0
+                ORDER BY `{debt_amount_col}` DESC
+                LIMIT {k};
+                """
+                return CompiledQueryPlan(intent="debt_table", expected_type=AnswerType.TABLE, sql=sql.strip(), confidence=0.95)
+            elif sales_table and prod_name_col:
+                where_str, params = build_where_clause()
+                metric = amount_expr if nlp_info.is_revenue_query else (f"SUM(`{qty_col}`)" if qty_col else amount_expr)
+                metric_name = "doanh_thu" if nlp_info.is_revenue_query else "so_luong"
+                sql = f"""
+                SELECT `{prod_name_col}` AS ten_san_pham, ROUND({metric}, 2) AS {metric_name}
+                FROM `{sales_table}`
+                {where_str}
+                GROUP BY `{prod_name_col}`
+                ORDER BY {metric} DESC
+                LIMIT {k};
+                """
+                return CompiledQueryPlan(intent="sales_table", expected_type=AnswerType.TABLE, sql=sql.strip(), params=tuple(params), confidence=0.95)
 
         # 18. Intent: Total Revenue
         if nlp_info.is_revenue_query:
             if not sales_table or not amount_expr:
                 return CompiledQueryPlan(intent="revenue", expected_type=AnswerType.UNANSWERABLE)
 
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` {where_str};"
-            return CompiledQueryPlan(intent="revenue", expected_type=AnswerType.NUMBER, sql=sql.strip(), confidence=0.95)
+            return CompiledQueryPlan(intent="revenue", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params), confidence=0.95)
 
         # 19. Intent: Total Quantity Sold
         if nlp_info.is_quantity_query or any(w in clean_q for w in ["bán được bao nhiêu", "số lượng bán", "tiêu thụ được bao nhiêu"]):
             if not sales_table:
                 return CompiledQueryPlan(intent="quantity", expected_type=AnswerType.UNANSWERABLE)
 
-            where_str = build_where_clause()
+            where_str, params = build_where_clause()
             target_expr = f"`{qty_col}`" if qty_col else amount_expr
             sql = f"SELECT ROUND(COALESCE(SUM({target_expr}), 0), 2) FROM `{sales_table}` {where_str};"
-            return CompiledQueryPlan(intent="quantity", expected_type=AnswerType.NUMBER, sql=sql.strip(), confidence=0.92)
+            return CompiledQueryPlan(intent="quantity", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params), confidence=0.92)
 
         # Default fallback: return ABSTAIN to prevent -1 penalty
         return CompiledQueryPlan(
@@ -775,11 +867,24 @@ class BusinessRuleCompiler:
         debt_cust_col = None
         debt_amount_col = None
 
+        # Prioritize customer name column over type/category or codes
+        name_cols = [c.name for c in t.columns if any(k in c.name.lower() for k in ["ten_kh", "ten_khach", "khach_hang", "ho_ten", "customer_name"])]
+        if name_cols:
+            debt_cust_col = name_cols[0]
+        else:
+            code_cols = [c.name for c in t.columns if any(k in c.name.lower() for k in ["ma_kh", "customer_id", "id_kh"])]
+            if code_cols:
+                debt_cust_col = code_cols[0]
+            else:
+                for c in t.columns:
+                    if (c.semantic_role == "customer" or "khach" in c.name.lower()) and not any(k in c.name.lower() for k in ["loai", "nhom", "cap", "type"]):
+                        debt_cust_col = c.name
+                        break
+
         for c in t.columns:
-            if c.semantic_role == "customer" or "khach" in c.name.lower():
-                debt_cust_col = c.name
-            elif c.semantic_role == "debt" or any(k in c.name.lower() for k in ["tong_no", "cong_no", "so_tien", "tien_no"]):
+            if c.semantic_role == "debt" or any(k in c.name.lower() for k in ["tong_no", "cong_no", "so_tien", "tien_no"]):
                 debt_amount_col = c.name
+                break
 
         return debt_table, debt_cust_col, debt_amount_col
 

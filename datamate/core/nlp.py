@@ -96,6 +96,10 @@ class VietnameseNLP:
         r"\bsl\b": "số lượng",
         r"\bdt\b": "doanh thu",
         r"\bkh\b": "khách hàng",
+        r"\bhqua\b": "hôm qua",
+        r"\bhq\b": "hôm qua",
+        r"\bhqa\b": "hôm qua",
+        r"\bhnay\b": "hôm nay",
     }
 
     # Regional dialect mapping
@@ -104,6 +108,8 @@ class VietnameseNLP:
         r"\btháng ni\b": "tháng này",
         r"\btuần ni\b": "tuần này",
         r"\bngày ni\b": "ngày này",
+        r"\bhôm ni\b": "hôm nay",
+        r"\bhom ni\b": "hôm nay",
         r"\bnăm ni\b": "năm nay",
         r"\bđơn mô\b": "đơn nào",
         r"\bthuốc mô\b": "thuốc nào",
@@ -263,7 +269,7 @@ class VietnameseNLP:
         is_why_causal = bool(re.search(r"\b(tại sao|tai sao|vì sao|vi sao|nguyên nhân|nguyen nhan|răng|do đâu|do dau)\b", q))
         is_future = bool(re.search(r"\b(dự đoán|dự báo|ngày mai|tháng sau|tuần sau|sắp tới|tương lai)\b", q))
         is_ambiguous_time = bool(re.search(r"\bbữa giờ\b", q))
-        is_subjective = bool(re.search(r"\b(có khá không|khá không|ổn không|tốt không|được không)\b", q))
+        is_subjective = bool(re.search(r"\b(có khá không|khá không|ổn không|tốt không|kinh doanh.*được không|tình hình.*được không)\b", q))
 
         # Check for unaccented phrases
         for pattern, replacement in cls.UNACCENTED_PHRASES:

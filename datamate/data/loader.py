@@ -74,14 +74,15 @@ def clean_dataframe_vectorized(df: pd.DataFrame) -> pd.DataFrame:
             if len(s) == 0:
                 continue
 
-            # 0. Ngày ở nhiều định dạng trộn lẫn (Excel hay trộn '01/01/2026' với
-            #    '2025-03-01' và '9 thg 8 2026'). Chuẩn hoá theo TỪNG giá trị.
-            parsed_dates = s.map(parse_date_token)
-            if parsed_dates.notna().sum() >= max(3, int(len(s) * 0.8)):
-                df[col] = parsed_dates.reindex(df.index)
-                continue
-
             first_val = s.iloc[0]
+
+            # 0. Ngày ở nhiều định dạng trộn lẫn (Excel hay trộn '01/01/2026' với
+            #    '2025-03-01' và '9 thg 8 2026'). Chuẩn hoá theo TỪNG giá trị nếu có dấu hiệu ngày.
+            if any(k in first_val.lower() for k in ["-", "/", "thg"]) and re.search(r"\d", first_val):
+                parsed_dates = s.map(parse_date_token)
+                if parsed_dates.notna().sum() >= max(3, int(len(s) * 0.8)):
+                    df[col] = parsed_dates.reindex(df.index)
+                    continue
 
             # 1. Date format '1 thg 6 2025' or '01 thg 06 2025'
             if "thg" in first_val.lower():
@@ -168,20 +169,6 @@ class BusinessDataLoader:
 
     def load(self) -> BusinessDataLoader:
         """Scan directory and load all data files."""
-        # Special high-performance handler for 5-Million-Row Dataset
-        if self.business_id == "biz_mega_5m":
-            csv_path = os.path.abspath("datamate_vietnamese_qa_5m.csv")
-            if os.path.exists(csv_path):
-                import duckdb
-                self.conn = duckdb.connect(":memory:")
-                self.conn.execute(f"CREATE VIEW sales_5m AS SELECT * FROM read_csv_auto('{csv_path}');")
-                self.table_names = ["sales_5m"]
-                readme_path = os.path.join(self.business_dir, "README.md")
-                if os.path.exists(readme_path):
-                    with open(readme_path, "r", encoding="utf-8", errors="replace") as f:
-                        self.readme_text = f.read()
-                return self
-
         if not os.path.exists(self.business_dir):
             self.conn = sqlite3.connect(":memory:")
             return self
@@ -209,8 +196,8 @@ class BusinessDataLoader:
             except Exception:
                 pass
 
-        # Build vào file tạm rồi rename nguyên tử: tránh cache dở dang.
-        build_path = f"{self.cache_file}.building" if self.cache_file else None
+        # Build vào file tạm riêng cho process rồi rename nguyên tử: tránh cache dở dang và xung đột đa tiến trình
+        build_path = f"{self.cache_file}.{os.getpid()}.building" if self.cache_file else None
         if build_path and os.path.exists(build_path):
             try:
                 os.remove(build_path)
@@ -242,7 +229,13 @@ class BusinessDataLoader:
                 os.replace(build_path, self.cache_file)
                 self.conn = sqlite3.connect(self.cache_file)
             except OSError:
-                pass
+                # Nếu bị khoá hoặc xung đột quyền ghi, mở lại file sẵn có hoặc dùng in-memory
+                if os.path.exists(self.cache_file):
+                    self.conn = sqlite3.connect(self.cache_file)
+                elif os.path.exists(build_path):
+                    self.conn = sqlite3.connect(build_path)
+                else:
+                    self.conn = sqlite3.connect(":memory:")
 
         return self
 

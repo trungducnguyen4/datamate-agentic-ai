@@ -231,14 +231,45 @@ class TemporalResolver:
             end_str = yesterday.strftime("%Y-%m-%d")
             return DateRange(start_date=start_str, end_date=end_str)
 
-        # 3. Dynamic rolling "7 ngày gần đây", "7 ngày qua", "bảy ngày gần đây"
-        # Window: [anchor - 6 days, anchor] (Total exactly 7 days including as_of_date)
-        if any(w in q for w in ["7 ngày gần đây", "7 ngày qua", "bảy ngày gần đây", "bảy ngày qua", "7 ngay gan day", "7 ngay qua"]):
-            start_d = anchor - timedelta(days=6)
-            return DateRange(
-                start_date=start_d.strftime("%Y-%m-%d"),
-                end_date=anchor.strftime("%Y-%m-%d"),
-            )
+        # 3. Dynamic rolling "N ngày gần nhất", "N ngày gần đây", "N ngày qua"
+        # Rulebook §2 line 28: "N ngày gần nhất: N ngày liền nhau kể cả hôm nay, ngày cuối là hôm nay"
+        word_to_num = {
+            "một": 1, "mot": 1, "hai": 2, "ba": 3, "bốn": 4, "bon": 4,
+            "năm": 5, "nam": 5, "sáu": 6, "sau": 6, "bảy": 7, "bay": 7,
+            "tám": 8, "tam": 8, "chín": 9, "chin": 9, "mười": 10, "muoi": 10,
+        }
+        n_days_match = re.search(
+            r"\b(\d+|một|mot|hai|ba|bốn|bon|năm|nam|sáu|sau|bảy|bay|tám|tam|chín|chin|mười|muoi)\s*(?:ngày|ngay)\s*(?:gần nhất|gan nhat|gần đây|gan day|qua|vừa qua|vua qua)\b",
+            q,
+        )
+        if n_days_match:
+            raw_n = n_days_match.group(1).lower()
+            n = word_to_num.get(raw_n) or int(raw_n)
+            if n > 0:
+                start_d = anchor - timedelta(days=n - 1)
+                return DateRange(
+                    start_date=start_d.strftime("%Y-%m-%d"),
+                    end_date=anchor.strftime("%Y-%m-%d"),
+                )
+
+        # 3b. Dynamic rolling "N tháng gần đây", "ba tháng gần đây", "3 tháng gần đây"
+        n_months_match = re.search(
+            r"\b(\d+|một|mot|hai|ba|bốn|bon|năm|nam|sáu|sau|bảy|bay|tám|tam|chín|chin|mười|muoi)\s*(?:tháng|thang)\s*(?:gần nhất|gan nhat|gần đây|gan day|qua|vừa qua|vua qua)\b",
+            q,
+        )
+        if n_months_match:
+            raw_n = n_months_match.group(1).lower()
+            n = word_to_num.get(raw_n) or int(raw_n)
+            if n > 0:
+                cur_y = year
+                cur_m = month - (n - 1)
+                while cur_m <= 0:
+                    cur_m += 12
+                    cur_y -= 1
+                return DateRange(
+                    start_date=f"{cur_y:04d}-{cur_m:02d}-01",
+                    end_date=anchor.strftime("%Y-%m-%d"),
+                )
 
         # 4. "Cùng kỳ năm ngoái", "cùng kỳ năm trước"
         if any(w in q for w in ["cùng kỳ năm ngoái", "cùng kỳ năm trước", "cung ky nam ngoai", "cung ky nam truoc"]):
@@ -304,8 +335,8 @@ class TemporalResolver:
                 target_month=f"{y_s:04d}-{m_s:02d}",
             )
 
-        # 7b. Quarter: "Quý 1", "quý 2", "quý 3", "quý 4", "quy 4/2025", "quý 4 năm 2025", "quý 4 năm ngoái"
-        quarter_match = re.search(r"(?:quý|quy)\s*([1-4]|i{1,3}|iv)(?:[\s/,-]*(?:năm|nam)?\s*(\d{4}))?", q)
+        # 7b. Quarter: "Quý 1", "quý 2", "q1", "q2", "quy 4/2025", "quý 4 năm 2025", "quý 4 năm ngoái", "quý một"
+        quarter_match = re.search(r"(?:quý|quy|\bq)\s*([1-4]|i{1,3}|iv|một|mot|hai|ba|bốn|bon)(?:[\s/,-]*(?:năm|nam)?\s*(\d{4}))?\b", q)
         if quarter_match:
             raw_q = quarter_match.group(1).lower()
             if quarter_match.group(2):
@@ -314,7 +345,12 @@ class TemporalResolver:
                 target_yr = year - 1
             else:
                 target_yr = year
-            roman_map = {"1": 1, "i": 1, "2": 2, "ii": 2, "3": 3, "iii": 3, "4": 4, "iv": 4}
+            roman_map = {
+                "1": 1, "i": 1, "một": 1, "mot": 1,
+                "2": 2, "ii": 2, "hai": 2,
+                "3": 3, "iii": 3, "ba": 3,
+                "4": 4, "iv": 4, "bốn": 4, "bon": 4,
+            }
             q_num = roman_map.get(raw_q, 1)
             start_m = (q_num - 1) * 3 + 1
             end_m = q_num * 3
@@ -365,13 +401,13 @@ class TemporalResolver:
                 )
 
         # 9. "Hôm nay", "hôm qua", "hôm kia"
-        if any(w in q for w in ["hôm nay", "ngày này", "ngày ni", "hom nay", "ngay nay", "ngay ni"]):
+        if any(w in q for w in ["hôm nay", "ngày này", "ngày ni", "hôm ni", "hom ni", "hom nay", "ngay nay", "ngay ni", "hnay", "bữa nay", "bua nay"]):
             d_str = anchor.strftime("%Y-%m-%d")
             return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
-        if any(w in q for w in ["hôm qua", "ngày qua", "hom qua", "ngay qua"]):
+        if re.search(r"(?<!\d)\s*\b(?:hôm qua|hom qua|ngày hôm qua|ngay hom qua|ngày qua|ngay qua|hqua|bữa qua|bua qua|hqa)\b", q):
             d_str = (anchor - timedelta(days=1)).strftime("%Y-%m-%d")
             return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
-        if any(w in q for w in ["hôm kia", "hom kia"]):
+        if any(w in q for w in ["hôm kia", "hom kia", "hkia"]):
             d_str = (anchor - timedelta(days=2)).strftime("%Y-%m-%d")
             return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
 
@@ -430,5 +466,38 @@ class TemporalResolver:
                 start_date=f"{year:04d}-01-01",
                 end_date=anchor.strftime("%Y-%m-%d"),
             )
+
+        return None
+
+    @classmethod
+    def resolve_comparison_periods(cls, query: str, as_of_date_str: str) -> Optional[Tuple[DateRange, DateRange]]:
+        """Resolve current and comparison baseline period according to Rulebook §1 Rule 19 & §2 Rule 32.
+
+        Example:
+        - "Tháng này so với tháng trước":
+          Period 1 (Current): 1st to as_of_date
+          Period 2 (Comparison): 1st of prev month to min(day of as_of_date, last day of prev month)
+        - "Tuần này so với tuần trước":
+          Period 1: Monday of this week to as_of_date
+          Period 2: Monday of last week to same day of last week
+        """
+        q = query.lower()
+        anchor = cls.parse_as_of_date(as_of_date_str)
+        year, month, day = anchor.year, anchor.month, anchor.day
+
+        # Compare month vs previous month
+        if any(w in q for w in ["tháng này", "tháng ni", "thang nay"]) and any(w in q for w in ["tháng trước", "tháng rồi", "cùng kỳ", "thang truoc", "thang roi"]):
+            cur_start = f"{year:04d}-{month:02d}-01"
+            cur_end = anchor.strftime("%Y-%m-%d")
+            cur_range = DateRange(start_date=cur_start, end_date=cur_end)
+
+            prev_y = year if month > 1 else year - 1
+            prev_m = month - 1 if month > 1 else 12
+            last_day_prev = calendar.monthrange(prev_y, prev_m)[1]
+            prev_day = min(day, last_day_prev)
+            prev_start = f"{prev_y:04d}-{prev_m:02d}-01"
+            prev_end = f"{prev_y:04d}-{prev_m:02d}-{prev_day:02d}"
+            prev_range = DateRange(start_date=prev_start, end_date=prev_end)
+            return cur_range, prev_range
 
         return None

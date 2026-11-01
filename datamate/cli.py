@@ -68,10 +68,13 @@ def run_pipeline(
             log.write(
                 json.dumps(
                     {
-                        "id": trace.id,
+                        "question_id": sub_item.id,
+                        "type": sub_item.type.value if hasattr(sub_item.type, "value") else str(sub_item.type),
+                        "answer": sub_item.answer,
                         "status": trace.status,
                         "intent": trace.intent,
                         "sql": trace.sql,
+                        "params": list(trace.params) if trace.params else None,
                         "error_phase": trace.error_phase,
                         "error_message": trace.error_message,
                         "latency_ms": round(trace.latency_ms, 3),

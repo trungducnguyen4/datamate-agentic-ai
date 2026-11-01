@@ -28,6 +28,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY datamate /app/datamate
 COPY scripts /app/scripts
 COPY predict.sh /app/predict.sh
+COPY data/public_test/calendar.csv /app/calendar.csv
+COPY data/public_test/rulebook.md /app/rulebook.md
 RUN chmod +x /app/predict.sh
 
 # Create input/output and cache directories
