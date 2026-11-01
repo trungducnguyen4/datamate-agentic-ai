@@ -322,6 +322,14 @@ class SchemaInspector:
             if kw in clean_name:
                 return "order_id"
 
+        # Check guest/cover counts which contain 'khach' but are numbers of guests
+        if any(gk in clean_name for gk in ["so_khach", "luong_khach", "so_luong_khach"]) or any(gk in compact_name for gk in ["sokhach", "luongkhach", "soluongkhach"]):
+            return "quantity"
+
+        # Check customer groups/segments which contain 'khach' but are categories
+        if any(gk in clean_name for gk in ["nhom_khach", "nhom_kh"]) or any(gk in compact_name for gk in ["nhomkhach", "nhomkh"]):
+            return "category"
+
         # 2. Customer must be checked before Product ("khach_hang" contains "hang")
         for kw in cls.CUSTOMER_KEYWORDS:
             if kw in clean_name:

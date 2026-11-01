@@ -298,6 +298,36 @@ class TemporalResolver:
                 is_exact_day=True,
             )
 
+        # 6a. Quarter: "Quý 1", "quý 2", "q1", "q2", "quy 4/2025", "quý 4 năm 2025", "quý 4 năm ngoái", "quý một"
+        quarter_match = re.search(r"(?:quý|quy|\bq)\s*([1-4]|i{1,3}|iv|một|mot|hai|ba|bốn|bon)(?:[\s/,-]*(?:năm|nam)?\s*(\d{4}))?\b", q)
+        if quarter_match:
+            raw_q = quarter_match.group(1).lower()
+            if quarter_match.group(2):
+                target_yr = int(quarter_match.group(2))
+            elif any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
+                target_yr = year - 1
+            else:
+                target_yr = year
+            roman_map = {
+                "1": 1, "i": 1, "một": 1, "mot": 1,
+                "2": 2, "ii": 2, "hai": 2,
+                "3": 3, "iii": 3, "ba": 3,
+                "4": 4, "iv": 4, "bốn": 4, "bon": 4,
+            }
+            q_num = roman_map.get(raw_q, 1)
+            start_m = (q_num - 1) * 3 + 1
+            end_m = q_num * 3
+            # Rule 34: Tháng M, quý Q không ghi năm: của năm nay nếu không sau hôm nay; sau hôm nay thì của năm trước.
+            if not quarter_match.group(2) and not any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
+                q_start_date = date(target_yr, start_m, 1)
+                if q_start_date > anchor:
+                    target_yr = year - 1
+            last_day = calendar.monthrange(target_yr, end_m)[1]
+            return DateRange(
+                start_date=f"{target_yr:04d}-{start_m:02d}-01",
+                end_date=f"{target_yr:04d}-{end_m:02d}-{last_day:02d}",
+            )
+
         # 6b. Multi-month extraction or Short Month Formats (e.g. 3/25, 4/25, 5/25, th7/2025, 8/2025)
         cand_months = cls.extract_candidate_months(q)
         if len(cand_months) >= 2:
@@ -333,36 +363,6 @@ class TemporalResolver:
                 start_date=f"{y_s:04d}-{m_s:02d}-01",
                 end_date=f"{y_s:04d}-{m_s:02d}-{last_day:02d}",
                 target_month=f"{y_s:04d}-{m_s:02d}",
-            )
-
-        # 7b. Quarter: "Quý 1", "quý 2", "q1", "q2", "quy 4/2025", "quý 4 năm 2025", "quý 4 năm ngoái", "quý một"
-        quarter_match = re.search(r"(?:quý|quy|\bq)\s*([1-4]|i{1,3}|iv|một|mot|hai|ba|bốn|bon)(?:[\s/,-]*(?:năm|nam)?\s*(\d{4}))?\b", q)
-        if quarter_match:
-            raw_q = quarter_match.group(1).lower()
-            if quarter_match.group(2):
-                target_yr = int(quarter_match.group(2))
-            elif any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
-                target_yr = year - 1
-            else:
-                target_yr = year
-            roman_map = {
-                "1": 1, "i": 1, "một": 1, "mot": 1,
-                "2": 2, "ii": 2, "hai": 2,
-                "3": 3, "iii": 3, "ba": 3,
-                "4": 4, "iv": 4, "bốn": 4, "bon": 4,
-            }
-            q_num = roman_map.get(raw_q, 1)
-            start_m = (q_num - 1) * 3 + 1
-            end_m = q_num * 3
-            # Rule 34: Tháng M, quý Q không ghi năm: của năm nay nếu không sau hôm nay; sau hôm nay thì của năm trước.
-            if not quarter_match.group(2) and not any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
-                q_start_date = date(target_yr, start_m, 1)
-                if q_start_date > anchor:
-                    target_yr = year - 1
-            last_day = calendar.monthrange(target_yr, end_m)[1]
-            return DateRange(
-                start_date=f"{target_yr:04d}-{start_m:02d}-01",
-                end_date=f"{target_yr:04d}-{end_m:02d}-{last_day:02d}",
             )
 
         # 8. Year-to-date: "năm 2026 đến nay", "năm 2026 đến giờ"

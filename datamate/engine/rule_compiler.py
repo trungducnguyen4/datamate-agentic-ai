@@ -3,7 +3,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 from datamate.core.nlp import VietnameseNLP, NormalizedQueryInfo
 from datamate.core.types import AnswerType
-from datamate.data.schema_inspector import TableInfo
+from datamate.data.schema_inspector import TableInfo, strip_accents
 from datamate.temporal.resolver import DateRange, TemporalResolver
 
 
@@ -436,7 +436,7 @@ class BusinessRuleCompiler:
                 return cls._apply_guards(CompiledQueryPlan(intent="distinct_products", expected_type=AnswerType.ABSTAIN), nlp_info, clean_q)
             where_str, params = build_where_clause()
             sql = f"SELECT COUNT(DISTINCT `{prod_name_col}`) FROM `{sales_table}` {where_str};"
-            return cls._apply_guards(CompiledQueryPlan(intent="distinct_products", expected_type=AnswerType.NUMBER, sql=sql.strip()), nlp_info, clean_q)
+            return cls._apply_guards(CompiledQueryPlan(intent="distinct_products", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
 
         # 13. Intent: Order count (SEM-10: Tháng này bán được bao nhiêu đơn?)
         if nlp_info.is_order_count_query:
@@ -479,7 +479,7 @@ class BusinessRuleCompiler:
         # 13b. Intent: Best customer / Top buyer (SEM-05 / Rule 48: Đơn khách lẻ không tính)
         if nlp_info.is_customer_query:
             if not sales_table or not cust_col:
-                return cls._apply_guards(CompiledQueryPlan(intent="top_customer", expected_type=AnswerType.ABSTAIN, unanswerable_reason="Missing customer column in sales data."), nlp_info, clean_q)
+                return cls._apply_guards(CompiledQueryPlan(intent="top_customer", expected_type=AnswerType.UNANSWERABLE, unanswerable_reason="Missing customer column in sales data."), nlp_info, clean_q)
             where_str, params = build_where_clause()
 
             # Rulebook §3: "Khách trung thành nhất: khách có nhiều ngày có mua nhất trong kỳ"
@@ -499,6 +499,8 @@ class BusinessRuleCompiler:
             no_retail = f"(LOWER(TRIM(`{cust_col}`)) NOT IN ('lẻ', 'le', 'kl', 'khách lẻ', 'khach le', 'khách vãng lai', 'khach vang lai', 'vãng lai', 'vang lai', '') AND LOWER(`{cust_col}`) NOT LIKE '%khách lẻ%' AND LOWER(`{cust_col}`) NOT LIKE '%khach le%' AND LOWER(`{cust_col}`) NOT LIKE '%vãng lai%')"
             where_join = f"{where_str} AND `{cust_col}` IS NOT NULL AND {no_retail}" if where_str else f"WHERE `{cust_col}` IS NOT NULL AND {no_retail}"
             having_clause = f"HAVING COUNT(DISTINCT `{order_id_col}`) >= 2" if any(w in clean_q for w in ["sộp", "sop"]) and order_id_col else ""
+            k = nlp_info.top_k or 1
+            exp_type = AnswerType.LIST if k > 1 else AnswerType.STRING
             sql = f"""
             SELECT `{cust_col}`
             FROM `{sales_table}`
@@ -506,9 +508,9 @@ class BusinessRuleCompiler:
             GROUP BY `{cust_col}`
             {having_clause}
             ORDER BY {sum_expr} DESC
-            LIMIT 1;
+            LIMIT {k};
             """
-            return cls._apply_guards(CompiledQueryPlan(intent="top_customer", expected_type=AnswerType.STRING, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
+            return cls._apply_guards(CompiledQueryPlan(intent="top_customer", expected_type=exp_type, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
 
         # 14. Intent: Unsold products check (Grounded against Catalog and Sales)
         if nlp_info.is_unsold_query:
@@ -802,6 +804,72 @@ class BusinessRuleCompiler:
         if nlp_info.is_customer_count_query and plan.expected_type == AnswerType.STRING:
             return CompiledQueryPlan(intent="customer_count_guard_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
 
+        # Guard 4: Cancellation with specific reason -> ABSTAIN
+        if plan.intent in ("cancel_count", "cancel_rate", "canceled_revenue"):
+            if any(w in clean_q for w in ["vì", "vi ", "lý do", "ly do", "nguyên nhân", "nguyen nhan", "giao trễ", "giao tre", "hỏng", "hong", "đổi ý", "doi y"]):
+                return CompiledQueryPlan(intent="cancel_reason_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+
+        # Guard 5: Comparison / Side comparison for top_customer -> ABSTAIN
+        if plan.intent == "top_customer":
+            if any(w in clean_q for w in ["bên nào", "ben nao", "ai hơn", "ai hon", "so với", "so voi", "nhiều hơn", "nhieu hon"]):
+                return CompiledQueryPlan(intent="customer_comparison_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+
+        # Guard 6: Unhandled Slice Precision Guard for aggregates (revenue, order_count, quantity)
+        if plan.intent in ("revenue", "order_count", "quantity"):
+            guard_keywords = [
+                # Channels
+                "tại quầy", "tai quay", "qua điện thoại", "qua dien thoai", "online", "mang về", "mang ve",
+                "giao hàng", "giao hang", "tiền ship", "tien ship", "phí ship", "phi ship", "vận chuyển", "van chuyen",
+                "shopee", "tiki", "lazada", "grab", "baemin", "shopeefood", "gojek", "tại bàn", "tai ban", "mang đi", "mang di",
+                # Segments & Locations
+                "nhóm sỉ", "nhom si", "khách sỉ", "khach si", "khách buôn", "khach buon", "khách lẻ", "khach le",
+                "thân thiết", "than thiet", "khách quen", "khach quen", "khách mới", "khach moi", "vip", "thành viên", "thanh vien",
+                "ở đường", "o duong", "tại đường", "tai duong", "khách ở", "khach o", "khu vực", "khu vuc",
+                # Costs, Purchases, Inventory, Profit
+                "nhập hàng", "nhap hang", "đánh hàng", "danh hang", "cất hàng", "cat hang", "nhập kho", "nhap kho",
+                "chi nhập", "chi nhap", "tiền hàng nhập", "tien hang nhap", "giá vốn", "gia von", "chi phí", "chi phi",
+                "lãi", "lai", "lợi nhuận", "loi nhuan", "tiền lời", "tien loi",
+                # Payment, credit, installments
+                "chuyển khoản", "chuyen khoan", "tiền mặt", "tien mat", "quẹt thẻ", "quet the", "thẻ tín dụng", "the tin dung",
+                "ví điện tử", "vi dien tu", "momo", "zalopay", "vnpay", "trả góp", "tra gop", "bán chịu", "ban chiu",
+                "ghi nợ", "ghi no", "chưa góp", "chua gop", "kỳ chưa tới hạn", "sau hôm nay", "sau hom nay",
+                # Shifts & time of day
+                "ca sáng", "ca sang", "ca chiều", "ca chieu", "ca tối", "ca toi", "ca đêm", "ca dem",
+                "buổi sáng", "buoi sang", "buổi trưa", "buoi trua", "buổi chiều", "buoi chieu", "buổi tối", "buoi toi",
+                "ban ngày", "ban ngay", "ban đêm", "ban dem", "khung giờ", "khung gio", "giờ cao điểm", "gio cao diem",
+                # Averages & per-order
+                "trung bình", "trung binh", "bình quân", "binh quan", "mỗi đơn", "moi don", "từng đơn", "tung don",
+                "1 đơn", "một đơn", "mot don",
+                # Multi-values & orderings
+                "lần lượt", "lan luot", "tương ứng", "tuong ung", "với lại", "so với", "và bao nhiêu", "va bao nhieu",
+                "từng tháng", "tung thang", "mỗi tháng bao nhiêu", "moi thang bao nhieu", "mỗi ngày bao nhiêu", "moi ngay bao nhieu",
+                "từng ngày", "tung ngay", "thứ tự đó", "thu tu do",
+                # Delivery batches & staff
+                "đợt", "dot", "chở thành", "giao từ", "lần giao", "nhân viên", "nhan vien", "nv ", "thu ngân", "thu ngan",
+            ]
+            if any(k in clean_q for k in guard_keywords):
+                return CompiledQueryPlan(intent="slice_guard_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+
+            # Threshold pattern (e.g. từ 1.100.000đ trở lên, dưới 500k, đạt...)
+            threshold_pattern = re.compile(
+                r"(?:từ|tu|trên|tren|dưới|duoi|ít nhất|it nhat|nhiều hơn|nhieu hon|cao hơn|cao hon|thấp hơn|thap hon|lớn hơn|lon hon|nhỏ hơn|nho hon|vượt|vuot|quá|qua)\s*\d+[\d\.,]*|"
+                r"\d+[\d\.,]*\s*(?:triệu|tr|k|nghìn|ngàn|đ|vnd|đồng|dong)\s*(?:trở lên|tro len|trở xuống|tro xuong|đổ lại|do lai)|"
+                r"(?:đạt|dat)\s+\d+[\d\.,]*"
+            )
+            if threshold_pattern.search(clean_q):
+                return CompiledQueryPlan(intent="threshold_guard_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+
+            # Specific category mentioned in question but unparsed
+            q_clean_h = re.sub(r"\b(cửa hàng|cua hang|đơn hàng|don hang)\b", "", clean_q)
+            if not nlp_info.category_filter and not nlp_info.has_specific_product:
+                if re.search(r"\b(nhóm|loại|phân loại|phan loai|ngành hàng|nganh hang)\b", q_clean_h):
+                    return CompiledQueryPlan(intent="unparsed_category_guard_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+                m = re.search(r"\bbán\s+(.+?)\s+(?:được|duoc)\s+(?:bao nhiêu|mấy|bnhiu|bn)", q_clean_h)
+                if m:
+                    middle = m.group(1).strip()
+                    if middle and middle not in ("ra", "thì", "thi", "tổng cộng", "tong cong", "tat ca", "tất cả"):
+                        return CompiledQueryPlan(intent="unparsed_product_guard_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+
         return plan
 
     @classmethod
@@ -858,8 +926,22 @@ class BusinessRuleCompiler:
 
         for c in t.columns:
             name_lower = c.name.lower()
+            name_clean = strip_accents(c.name).lower()
             if c.semantic_role == "customer":
-                cust_col = c.name
+                if not cust_col:
+                    cust_col = c.name
+                else:
+                    curr_clean = strip_accents(cust_col).lower()
+                    def _cust_priority(name: str) -> int:
+                        if any(k in name for k in ["ho_ten", "ten_khach", "ten_khach_hang", "nguoi_mua", "ten_nguoi_mua"]):
+                            return 3
+                        if any(k in name for k in ["ma_khach", "ma_khach_hang", "ma_khach_mua", "customer_id", "makh"]):
+                            return 2
+                        if any(k in name for k in ["khach_hang", "customer"]):
+                            return 1
+                        return 0
+                    if _cust_priority(name_clean) > _cust_priority(curr_clean):
+                        cust_col = c.name
             elif c.semantic_role == "status":
                 status_col = c.name
             elif c.semantic_role == "date" and not date_col:

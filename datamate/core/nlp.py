@@ -122,7 +122,7 @@ class VietnameseNLP:
         r"\brứa\b": "vậy",
         r"\brăng\b": "tại sao",
         r"\bhè\b": "",
-        r"\bchi\b": "gì",
+        r"\bchi\b(?!\s*(?:phí|phi|tiêu|tieu|nhập|nhap|ra|hàng|hang))": "gì",
         r"\bchừ\b": "hiện tại",
         # Northern & Southern dialect nuances
         r"\bto tiền nhất\b": "nhiều tiền nhất",
@@ -392,8 +392,8 @@ class VietnameseNLP:
 
         is_lowest_ranking = (
             bool(
-                re.search(r"\b(bán ế nhất|bán ít nhất|bán chậm nhất|lượng bán thấp nhất|lượng bán nhỏ nhất|tiêu thụ ít nhất|số lượng bán nhỏ nhất|ít người mua nhất|ít khách mua nhất|mua ít nhất|người mua ít nhất|khách mua ít nhất|ít được mua nhất)\b", q)
-                or (re.search(r"\b(sản phẩm|mặt hàng|thuốc|món|hàng|sp)\b", q) and re.search(r"\b(kém nhất|thấp nhất|ế nhất)\b", q))
+                re.search(r"\b(bán (?:được |dc )?(?:ế|ít|chậm) nhất|bán ế nhất|bán ít nhất|bán chậm nhất|lượng bán thấp nhất|lượng bán nhỏ nhất|tiêu thụ ít nhất|số lượng bán nhỏ nhất|ít người mua nhất|ít khách mua nhất|mua ít nhất|người mua ít nhất|khách mua ít nhất|ít được mua nhất)\b", q)
+                or (re.search(r"\b(sản phẩm|mặt hàng|thuốc|món|hàng|sp)\b", q) and re.search(r"\b(kém nhất|thấp nhất|ế nhất|ít nhất)\b", q))
             ) or is_revenue_lowest
         ) and not is_customer_count_query
 
@@ -509,6 +509,9 @@ class VietnameseNLP:
                     "mọi", "moi", "món", "mon", "sản phẩm", "san pham", "mặt hàng", "mat hang",
                     "thuốc", "thuoc", "hàng", "hang", "sp", "đơn", "don", "khách", "khach",
                     "nhân viên", "nhan vien", "ca sáng", "ca sang", "ca chiều", "ca chieu",
+                    "cùng kỳ", "cung ky", "năm ngoái", "nam ngoai", "năm trước", "nam truoc",
+                    "năm nay", "nam nay", "năm", "nam", "tháng", "thang", "tuần", "tuan",
+                    "ngày", "ngay", "quý", "quy", "dịp", "dip", "đợt", "dot",
                 )
 
                 for cand_m in (p_m1, p_m2, p_m3):
