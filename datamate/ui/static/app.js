@@ -1,6 +1,9 @@
 let businesses = [];
 let currentTables = {};
 let testedCases = new Set();
+let currentDataset = 'public_test';
+let currentSampleQuestions = [];
+let sampleOffset = 0;
 
 const CHECKLIST_ITEMS = [
   { id: "VN-02", biz: "biz_099", q: "Tháng này mặt hàng nào bán chạy nhất?", desc: "Câu tự nhiên, chuẩn (Số lượng)", date: "2026-03-04" },
@@ -30,7 +33,7 @@ async function init() {
 async function loadBusinesses() {
   const sel = document.getElementById('businessSelect');
   try {
-    const res = await fetch('/api/businesses');
+    const res = await fetch('/api/businesses?dataset=' + currentDataset);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     businesses = await res.json();
     sel.innerHTML = '';
@@ -59,8 +62,9 @@ async function onBusinessChange(bizId) {
   if (b && readmeEl) {
     readmeEl.textContent = b.readme || 'Không có mô tả';
   }
+  await loadSampleQuestions(bizId);
   try {
-    const res = await fetch(`/api/business/${bizId}/tables`);
+    const res = await fetch(`/api/business/${bizId}/tables?dataset=` + currentDataset);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     currentTables = await res.json();
     renderTables(currentTables);
@@ -140,36 +144,54 @@ function openTableModal(tName, t) {
   if (modal) modal.classList.remove('hidden');
 }
 
-async function loadSampleQuestions() {
+async function loadSampleQuestions(bizId = '') {
   try {
-    const res = await fetch('/api/sample-questions');
+    const sel = document.getElementById('businessSelect');
+    const targetBiz = bizId || (sel ? sel.value : '');
+    const url = `/api/sample-questions?dataset=${currentDataset}${targetBiz ? '&business_id=' + targetBiz : ''}`;
+    const res = await fetch(url);
     if (!res.ok) return;
-    const qList = await res.json();
-    const pillsContainer = document.getElementById('samplePills');
-    if (!pillsContainer) return;
-    pillsContainer.innerHTML = '';
-    qList.forEach(q => {
-      const btn = document.createElement('button');
-      btn.className = 'text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/60 px-2.5 py-1 rounded-lg transition';
-      btn.textContent = q.question;
-      btn.onclick = async () => {
-        const sel = document.getElementById('businessSelect');
-        if (sel) {
-          sel.value = q.business_id;
-          await onBusinessChange(q.business_id);
-        }
-        const qInput = document.getElementById('questionInput');
-        if (qInput) qInput.value = q.question;
-        const asOf = document.getElementById('asOfDate');
-        if (asOf && q.as_of_date) {
-          asOf.value = q.as_of_date;
-        }
-      };
-      pillsContainer.appendChild(btn);
-    });
+    currentSampleQuestions = await res.json();
+    sampleOffset = 0;
+    renderSamplePills();
   } catch (e) {
     console.error('Error loading sample questions:', e);
   }
+}
+
+function renderSamplePills() {
+  const pillsContainer = document.getElementById('samplePills');
+  if (!pillsContainer) return;
+  pillsContainer.innerHTML = '';
+
+  if (!currentSampleQuestions || currentSampleQuestions.length === 0) {
+    pillsContainer.innerHTML = '<span class="text-xs text-slate-500 italic">Không có gợi ý nào cho doanh nghiệp này</span>';
+    return;
+  }
+
+  // Display at most 3-4 clean, compact questions
+  const PAGE_SIZE = 3;
+  const start = sampleOffset % currentSampleQuestions.length;
+  let slice = currentSampleQuestions.slice(start, start + PAGE_SIZE);
+  if (slice.length < PAGE_SIZE && currentSampleQuestions.length >= PAGE_SIZE) {
+    slice = slice.concat(currentSampleQuestions.slice(0, PAGE_SIZE - slice.length));
+  }
+
+  slice.forEach(q => {
+    const btn = document.createElement('button');
+    btn.className = 'text-[11px] bg-slate-800 hover:bg-slate-700 hover:border-blue-500/40 text-slate-300 border border-slate-700/60 px-3 py-1.5 rounded-lg transition text-left truncate max-w-[280px] sm:max-w-[360px] shadow-sm flex items-center gap-1.5';
+    btn.title = q.question;
+    btn.innerHTML = `<i class="fa-solid fa-arrow-turn-down-right text-blue-400 text-[9px]"></i> <span class="truncate">${q.question}</span>`;
+    btn.onclick = () => {
+      const qInput = document.getElementById('questionInput');
+      if (qInput) qInput.value = q.question;
+      const asOf = document.getElementById('asOfDate');
+      if (asOf && q.as_of_date) {
+        asOf.value = q.as_of_date;
+      }
+    };
+    pillsContainer.appendChild(btn);
+  });
 }
 
 function renderChecklist() {
@@ -226,8 +248,28 @@ function renderChecklist() {
 }
 
 function setupEvents() {
+  const dsSel = document.getElementById('datasetSelect');
+  if (dsSel) {
+    currentDataset = dsSel.value;
+    dsSel.onchange = async () => {
+      currentDataset = dsSel.value;
+      await loadBusinesses();
+      await loadSampleQuestions();
+    };
+  }
+
   const sel = document.getElementById('businessSelect');
   if (sel) sel.onchange = (e) => onBusinessChange(e.target.value);
+
+  const refreshBtn = document.getElementById('refreshSamplesBtn');
+  if (refreshBtn) {
+    refreshBtn.onclick = () => {
+      if (currentSampleQuestions && currentSampleQuestions.length > 0) {
+        sampleOffset += 3;
+        renderSamplePills();
+      }
+    };
+  }
 
   const closeBtn = document.getElementById('closeModalBtn');
   if (closeBtn) closeBtn.onclick = () => {
@@ -299,7 +341,7 @@ async function ask() {
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ business_id: bizId, question: question, as_of_date: asOfDate })
+      body: JSON.stringify({ business_id: bizId, question: question, as_of_date: asOfDate, dataset: currentDataset })
     });
     if (!res.ok) {
       const errText = await res.text();

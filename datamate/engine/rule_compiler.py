@@ -386,13 +386,17 @@ class BusinessRuleCompiler:
                 sql = f"SELECT COUNT(*) FROM `{sales_table}` {where_str};"
             return CompiledQueryPlan(intent="order_count", expected_type=AnswerType.NUMBER, sql=sql.strip())
 
-        # 13. Intent: Best customer / Top buyer (SEM-05)
+        # 13. Intent: Best customer / Top buyer (SEM-05 / Rule 48: Đơn khách lẻ không tính)
         if nlp_info.is_customer_query:
             if not sales_table or not cust_col:
                 return CompiledQueryPlan(intent="top_customer", expected_type=AnswerType.UNANSWERABLE, unanswerable_reason="Missing customer column in sales data.")
             where_str = build_where_clause()
-            sum_expr = amount_expr if amount_expr else (f"SUM(`{qty_col}`)" if qty_col else "COUNT(*)")
-            where_join = f"{where_str} AND `{cust_col}` IS NOT NULL" if where_str else f"WHERE `{cust_col}` IS NOT NULL"
+            if any(w in clean_q for w in ["nhiều đơn", "số đơn", "nhiều đơn nhất", "nhiều lần mua"]):
+                sum_expr = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
+            else:
+                sum_expr = amount_expr if amount_expr else (f"SUM(`{qty_col}`)" if qty_col else "COUNT(*)")
+            no_retail = f"(LOWER(TRIM(`{cust_col}`)) NOT IN ('lẻ', 'le', 'kl', 'khách lẻ', 'khach le', 'khách vãng lai', 'khach vang lai', 'vãng lai', 'vang lai', '') AND LOWER(`{cust_col}`) NOT LIKE '%khách lẻ%' AND LOWER(`{cust_col}`) NOT LIKE '%khach le%' AND LOWER(`{cust_col}`) NOT LIKE '%vãng lai%')"
+            where_join = f"{where_str} AND `{cust_col}` IS NOT NULL AND {no_retail}" if where_str else f"WHERE `{cust_col}` IS NOT NULL AND {no_retail}"
             sql = f"""
             SELECT `{cust_col}`
             FROM `{sales_table}`
@@ -451,8 +455,16 @@ class BusinessRuleCompiler:
 
             where_str = build_where_clause()
             order_dir = "ASC" if nlp_info.is_lowest_ranking else "DESC"
-            sum_target = f"SUM(`{qty_col}`)" if qty_col else "COUNT(*)"
-            tie_breaker = f", `{prod_code_col}` ASC" if prod_code_col else f", `{prod_name_col}` ASC"
+
+            # Check if query asks specifically about buyers (người mua / khách mua)
+            if any(w in clean_q for w in ["người mua", "khách mua", "nguoi mua", "khach mua"]) and cust_col:
+                sum_target = f"COUNT(DISTINCT `{cust_col}`)"
+                secondary_sort = f", SUM(`{qty_col}`) {order_dir}" if qty_col else ""
+            else:
+                sum_target = f"SUM(`{qty_col}`)" if qty_col else "COUNT(*)"
+                secondary_sort = ""
+
+            tie_breaker = f"{secondary_sort}, `{prod_code_col}` ASC" if prod_code_col else f"{secondary_sort}, `{prod_name_col}` ASC"
 
             sql = f"""
             SELECT `{prod_name_col}`

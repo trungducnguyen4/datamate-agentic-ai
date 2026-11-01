@@ -14,6 +14,7 @@ class DataMateAgent:
     def __init__(self, data_root_dir: str):
         self.data_root_dir = os.path.abspath(data_root_dir)
         self._loaders_cache: Dict[str, BusinessDataLoader] = {}
+        self._tables_cache: Dict[str, Any] = {}
 
     def get_or_load_business(self, business_id: str) -> BusinessDataLoader:
         if business_id in self._loaders_cache:
@@ -24,11 +25,16 @@ class DataMateAgent:
         self._loaders_cache[business_id] = loader
         return loader
 
+    def get_tables(self, business_id: str, conn) -> Any:
+        if business_id not in self._tables_cache:
+            self._tables_cache[business_id] = SchemaInspector.inspect(conn)
+        return self._tables_cache[business_id]
+
     def answer_question(self, item: QuestionItem) -> SubmissionItem:
         """Process a single question and return a valid SubmissionItem."""
         try:
             loader = self.get_or_load_business(item.business_id)
-            tables = SchemaInspector.inspect(loader.conn)
+            tables = self.get_tables(item.business_id, loader.conn)
 
             # If no tables exist for this business
             if not tables:

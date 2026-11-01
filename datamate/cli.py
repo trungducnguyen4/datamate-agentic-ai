@@ -1,16 +1,27 @@
 from __future__ import annotations
 import argparse
+import io
 import json
 import os
 import sys
 import time
-from typing import List
+from typing import List, Optional
+
 from datamate.core.types import QuestionItem, SubmissionItem
 from datamate.engine.agent import DataMateAgent
 from datamate.evaluator.metric import compute_penalized_accuracy
 
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-def run_pipeline(data_dir: str, questions_file: str, output_file: str, eval_ref_file: str = None) -> None:
+
+def run_pipeline(
+    data_dir: str,
+    questions_file: str,
+    output_file: str,
+    eval_ref_file: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> None:
     if not os.path.exists(questions_file):
         print(f"Error: Questions file not found at {questions_file}", file=sys.stderr)
         sys.exit(1)
@@ -28,6 +39,9 @@ def run_pipeline(data_dir: str, questions_file: str, output_file: str, eval_ref_
             data = json.loads(line)
             questions.append(QuestionItem(**data))
 
+    if limit and limit > 0:
+        questions = questions[:limit]
+
     print(f"Processing {len(questions)} questions...")
     start_time = time.time()
     results: List[SubmissionItem] = []
@@ -35,7 +49,7 @@ def run_pipeline(data_dir: str, questions_file: str, output_file: str, eval_ref_
     for i, q in enumerate(questions, start=1):
         sub_item = agent.answer_question(q)
         results.append(sub_item)
-        if i % 100 == 0 or i == len(questions):
+        if i % 25 == 0 or i == len(questions):
             elapsed = time.time() - start_time
             print(f"[{i}/{len(questions)}] Processed ({elapsed:.1f}s)")
 
@@ -53,21 +67,29 @@ def run_pipeline(data_dir: str, questions_file: str, output_file: str, eval_ref_
     # Optional evaluation
     if eval_ref_file and os.path.exists(eval_ref_file):
         print(f"\nEvaluating against references at {eval_ref_file}...")
-        refs = []
+        refs_map = {}
         with open(eval_ref_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
-                    refs.append(json.loads(line))
-        metrics = compute_penalized_accuracy(results, refs)
-        print("=== EVALUATION METRICS ===")
+                    item = json.loads(line)
+                    refs_map[item["id"]] = item
+
+        matching_refs = [refs_map[r.id] for r in results if r.id in refs_map]
+        matching_results = [r for r in results if r.id in refs_map]
+
+        metrics = compute_penalized_accuracy(matching_results, matching_refs)
+        print("\n" + "=" * 35)
+        print("     PENALIZED ACCURACY REPORT     ")
+        print("=" * 35)
         print(f"Penalized Accuracy (PA): {metrics['pa']:.4f}")
-        print(f"Total Questions: {metrics['total']}")
-        print(f"Correct (+1): {metrics['correct']}")
-        print(f"Abstain (0):  {metrics['abstain']}")
-        print(f"Wrong (-1):   {metrics['wrong']}")
-        print(f"Accuracy:     {metrics['accuracy']*100:.2f}%")
-        print(f"Coverage:     {metrics['coverage']*100:.2f}%")
+        print(f"Total Questions:         {metrics['total']}")
+        print(f"Correct (+1):            {metrics['correct']}")
+        print(f"Abstain (0):             {metrics['abstain']}")
+        print(f"Wrong (-1):              {metrics['wrong']}")
+        print(f"Accuracy:                {metrics['accuracy']*100:.2f}%")
+        print(f"Coverage:                {metrics['coverage']*100:.2f}%")
+        print("=" * 35)
 
 
 def main():
@@ -76,6 +98,7 @@ def main():
     parser.add_argument("--questions", required=True, help="Path to questions.jsonl")
     parser.add_argument("--output", default="submission.jsonl", help="Path to write submission.jsonl")
     parser.add_argument("--eval-ref", default=None, help="Optional path to reference jsonl for PA evaluation")
+    parser.add_argument("--limit", type=int, default=None, help="Optional question limit")
 
     args = parser.parse_args()
     run_pipeline(
@@ -83,6 +106,7 @@ def main():
         questions_file=args.questions,
         output_file=args.output,
         eval_ref_file=args.eval_ref,
+        limit=args.limit,
     )
 
 

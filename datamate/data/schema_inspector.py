@@ -1,8 +1,15 @@
 from __future__ import annotations
 import re
 import sqlite3
+import unicodedata
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
+
+
+def strip_accents(s: str) -> str:
+    s = unicodedata.normalize("NFD", str(s))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return s.replace("đ", "d").replace("Đ", "d").lower()
 
 
 class ColumnInfo(BaseModel):
@@ -21,17 +28,19 @@ class TableInfo(BaseModel):
 class SchemaInspector:
     """Inspects tables in SQLite and infers semantic roles of columns."""
 
-    CUSTOMER_KEYWORDS = ["khach_hang", "khach", "customer", "client", "nguoi_mua", "ten_khach_hang", "benh_nhan"]
+    CUSTOMER_KEYWORDS = ["khach_hang", "khach", "customer", "client", "nguoi_mua", "ten_khach_hang", "benh_nhan", "doi_tac"]
     DEBT_KEYWORDS = ["cong_no", "tong_no", "con_no", "so_no", "tien_no", "debt", "chua_tra", "no_phai_tra"]
     DATE_KEYWORDS = ["ngay", "date", "created", "time", "thoi_gian", "order_date"]
-    STATUS_KEYWORDS = ["trang_thai", "status", "state", "tinh_trang"]
+    STATUS_KEYWORDS = ["trang_thai", "status", "state", "tinh_trang", "ket_qua"]
     TOTAL_AMOUNT_KEYWORDS = ["thanh_tien", "tong_tien", "doanh_thu", "total_amount", "amount", "subtotal", "tong", "tri_gia"]
-    UNIT_PRICE_KEYWORDS = ["don_gia", "unit_price", "price", "gia_ban", "gia"]
-    QUANTITY_KEYWORDS = ["so_luong", "quantity", "qty", "sl"]
+    QUANTITY_KEYWORDS = ["so_luong", "quantity", "qty", "sl", "quy_ra_dv_le", "so_luong_quy_doi", "so_luong_giao"]
+    UNIT_PRICE_KEYWORDS = ["don_gia", "unit_price", "price", "gia_ban", "gia_niem_yet", "don_gia_ban"]
     PRODUCT_KEYWORDS = [
         "san_pham", "sp", "product", "item", "hang_hoa", "mat_hang", "ten_sp", "ma_sp",
-        "ten_mon", "mon_an", "mon", "do_uong", "ten_thuoc", "thuoc", "vat_tu", "dich_vu"
+        "ten_mon", "mon_an", "mon", "do_uong", "ten_thuoc", "thuoc", "vat_tu", "dich_vu",
+        "noi_dung", "hang"
     ]
+    ORDER_ID_KEYWORDS = ["ma_hoa_don", "ma_don", "ma_dh", "order_id", "invoice_id", "so_hoa_don", "so_hd", "ma_giao_dich"]
     COST_KEYWORDS = ["gia_von", "cost", "chi_phi", "von", "loi_nhuan", "lai", "gia_nhap"]
     EXPIRY_KEYWORDS = ["han_su_dung", "hsd", "exp_date", "expiry", "ngay_het_han", "han_dung"]
     STOCK_KEYWORDS = ["ton_kho", "stock", "so_luong_ton", "hang_ton", "sl_ton", "tonkho"]
@@ -43,7 +52,7 @@ class SchemaInspector:
         tables: Dict[str, TableInfo] = {}
         cursor = conn.cursor()
 
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+        cursor.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%';")
         tbl_names = [row[0] for row in cursor.fetchall()]
 
         for tbl in tbl_names:
@@ -53,18 +62,23 @@ class SchemaInspector:
             cursor.execute(f"PRAGMA table_info(`{tbl}`);")
             cols_meta = cursor.fetchall()
 
+            sample_dict = {col[1]: [] for col in cols_meta}
+            try:
+                cursor.execute(f"SELECT * FROM `{tbl}` LIMIT 5;")
+                col_names_ordered = [desc[0] for desc in cursor.description]
+                sample_rows = cursor.fetchall()
+                for row in sample_rows:
+                    for c_name, val in zip(col_names_ordered, row):
+                        if val is not None and len(sample_dict[c_name]) < 3:
+                            sample_dict[c_name].append(val)
+            except Exception:
+                pass
+
             col_infos = []
             for col in cols_meta:
                 c_name = col[1]
                 c_type = col[2] or "TEXT"
-
-                # Fetch non-null sample values
-                try:
-                    cursor.execute(f"SELECT `{c_name}` FROM `{tbl}` WHERE `{c_name}` IS NOT NULL LIMIT 3;")
-                    samples = [r[0] for r in cursor.fetchall()]
-                except Exception:
-                    samples = []
-
+                samples = sample_dict.get(c_name, [])
                 role = cls._infer_role(c_name, samples)
                 col_infos.append(
                     ColumnInfo(
@@ -81,67 +95,76 @@ class SchemaInspector:
 
     @classmethod
     def _infer_role(cls, col_name: str, samples: List[Any]) -> Optional[str]:
-        name_lower = col_name.lower()
+        clean_name = strip_accents(col_name)
 
-        # 1. Customer must be checked before Product ("khach_hang" contains "hang")
+        # 1. Order ID
+        for kw in cls.ORDER_ID_KEYWORDS:
+            if kw in clean_name:
+                return "order_id"
+
+        # 2. Customer must be checked before Product ("khach_hang" contains "hang")
         for kw in cls.CUSTOMER_KEYWORDS:
-            if kw in name_lower:
+            if kw in clean_name:
                 return "customer"
 
-        # 2. Debt must be checked before Stock ("tong_no" starts with "tong" not "ton")
+        # 3. Debt must be checked before Stock ("tong_no" starts with "tong" not "ton")
         for kw in cls.DEBT_KEYWORDS:
-            if kw in name_lower or name_lower == "no":
+            if kw in clean_name or clean_name == "no":
                 return "debt"
 
-        # 3. Debt due date
+        # 4. Debt due date
         for kw in cls.DEBT_DUE_KEYWORDS:
-            if kw in name_lower:
+            if kw in clean_name:
                 return "debt_due"
 
-        # 4. Expiry
+        # 5. Expiry
         for kw in cls.EXPIRY_KEYWORDS:
-            if kw in name_lower:
+            if kw in clean_name:
                 return "expiry"
 
-        # 5. Cost
+        # 6. Cost
         for kw in cls.COST_KEYWORDS:
-            if kw in name_lower:
+            if kw in clean_name:
                 return "cost"
 
-        # 6. Stock
+        # 7. Stock
         for kw in cls.STOCK_KEYWORDS:
-            if kw in name_lower or name_lower == "ton":
+            if kw in clean_name or clean_name == "ton":
                 return "stock"
 
-        # 7. Employee
+        # 8. Employee
         for kw in cls.EMPLOYEE_KEYWORDS:
-            if kw in name_lower:
+            if kw in clean_name:
                 return "employee"
 
-        # 8. Date
-        for kw in cls.DATE_KEYWORDS:
-            if kw in name_lower:
-                return "date"
-
-        # 9. Status
-        for kw in cls.STATUS_KEYWORDS:
-            if kw in name_lower:
-                return "status"
-
-        # 10. Financial amounts & quantities
-        for kw in cls.TOTAL_AMOUNT_KEYWORDS:
-            if kw in name_lower:
-                return "total_amount"
-        for kw in cls.UNIT_PRICE_KEYWORDS:
-            if kw in name_lower:
-                return "unit_price"
+        # 9. Quantity (check before Unit Price to avoid "giao" matching "gia")
         for kw in cls.QUANTITY_KEYWORDS:
-            if kw in name_lower:
+            if kw in clean_name:
                 return "quantity"
 
-        # 11. Product
+        # 10. Financial amounts & unit prices
+        for kw in cls.TOTAL_AMOUNT_KEYWORDS:
+            if kw in clean_name:
+                return "total_amount"
+        for kw in cls.UNIT_PRICE_KEYWORDS:
+            if kw in clean_name:
+                return "unit_price"
+        if clean_name == "gia" or clean_name.startswith("gia_") or clean_name.endswith("_gia"):
+            return "unit_price"
+
+        # 11. Date
+        for kw in cls.DATE_KEYWORDS:
+            if kw in clean_name:
+                return "date"
+
+        # 12. Status
+        for kw in cls.STATUS_KEYWORDS:
+            if kw in clean_name:
+                return "status"
+
+        # 13. Product
         for kw in cls.PRODUCT_KEYWORDS:
-            if kw in name_lower:
+            if kw in clean_name:
                 return "product"
 
         # Check sample values for date patterns
