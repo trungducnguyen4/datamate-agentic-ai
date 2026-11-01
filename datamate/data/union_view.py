@@ -176,8 +176,11 @@ def _ensure_indexes(conn: sqlite3.Connection, tables: Dict[str, TableInfo]) -> N
 
 def _materialize(conn: sqlite3.Connection, select_sql: str) -> None:
     """Vật chất hoá union thành bảng thật + index (nhanh hơn quét view mỗi câu)."""
-    conn.execute(f"DROP VIEW IF EXISTS `{UNIFIED_VIEW}`")
-    conn.execute(f"DROP TABLE IF EXISTS `{UNIFIED_VIEW}`")
+    existing = conn.execute(
+        "SELECT type FROM sqlite_master WHERE name = ?", (UNIFIED_VIEW,)
+    ).fetchone()
+    if existing and existing[0] in ("table", "view"):
+        conn.execute(f"DROP {existing[0].upper()} `{UNIFIED_VIEW}`")
     conn.execute(f"CREATE TABLE `{UNIFIED_VIEW}` AS {select_sql}")
     for column in ("ngay", "ten_san_pham", "trang_thai", "ma_hoa_don"):
         conn.execute(

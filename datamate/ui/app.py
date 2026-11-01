@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -18,6 +19,8 @@ from datamate.evaluator.metric import compute_penalized_accuracy
 from datamate.temporal.resolver import TemporalResolver
 
 app = FastAPI(title="DataMate Interactive Playground", version="1.0.0")
+
+logger = logging.getLogger("datamate.ui")
 
 app.add_middleware(
     CORSMiddleware,
