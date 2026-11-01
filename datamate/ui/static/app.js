@@ -383,6 +383,164 @@ function setupEvents() {
       }
     };
   }
+
+  // Activity Diagram View Switchers
+  const btnVisual = document.getElementById('btnViewVisual');
+  if (btnVisual) btnVisual.onclick = () => switchFlowView('visual');
+
+  const btnMermaid = document.getElementById('btnViewMermaid');
+  if (btnMermaid) btnMermaid.onclick = () => switchFlowView('mermaid');
+
+  const copyMermaidBtn = document.getElementById('copyMermaidBtn');
+  if (copyMermaidBtn) {
+    copyMermaidBtn.onclick = () => {
+      navigator.clipboard.writeText(MERMAID_DIAGRAM_DEFINITION);
+      alert('Đã sao chép mã Mermaid Activity Diagram!');
+    };
+  }
+}
+
+const MERMAID_DIAGRAM_DEFINITION = `stateDiagram-v2
+    [*] --> InitialState: 1. Nhận câu hỏi & as_of_date
+    InitialState --> NLU: 2. Vietnamese NLU & Text Normalization
+    NLU --> Temporal: 3. Temporal Engine (Âm/Dương lịch)
+    Temporal --> IntentSchema: 4. Intent & Multi-table Schema Mapping
+    
+    state "Kiểm định Bằng chứng (PA Guard)" as Decision <<choice>>
+    IntentSchema --> Decision
+    
+    Decision --> PAGuardAbstain: [Mơ hồ / Thiếu dữ liệu / Causal]
+    Decision --> SafeSQLExecution: [Hợp lệ & Đầy đủ bằng chứng]
+    
+    state "Nhánh An Toàn (0đ)" as PAGuardAbstain {
+        TuChoi: 5A. Quyết định ABSTAIN hoặc UNANSWERABLE
+        BaoToanDiem: Bảo toàn 0đ (Tránh bị phạt -1đ)
+        TuChoi --> BaoToanDiem
+    }
+    
+    state "Nhánh Thực Thi (+1đ)" as SafeSQLExecution {
+        SinhSQL: 5B. Parameterized SQL Compilation
+        ThucThiSafe: 6. Safe SQL Executor (Query-Only, Opcode Limit)
+        DinhDang: 7. Format 9 Kiểu Output chuẩn BTC
+        SinhSQL --> ThucThiSafe
+        ThucThiSafe --> DinhDang
+    }
+    
+    BaoToanDiem --> [*]: Kết thúc luồng (0đ)
+    DinhDang --> [*]: Kết thúc luồng (+1đ)
+`;
+
+let mermaidRendered = false;
+
+async function renderMermaidDiagram() {
+  if (mermaidRendered || !window.mermaid) return;
+  const chartEl = document.getElementById('mermaidChart');
+  if (!chartEl) return;
+  try {
+    mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+    const { svg } = await mermaid.render('mermaidSvgId', MERMAID_DIAGRAM_DEFINITION);
+    chartEl.innerHTML = svg;
+    mermaidRendered = true;
+  } catch (err) {
+    console.error('Mermaid render error:', err);
+    chartEl.innerHTML = `<div class="text-rose-400 p-4">Lỗi hiển thị Mermaid: ${err.message}</div>`;
+  }
+}
+
+function switchFlowView(view) {
+  const visCont = document.getElementById('viewVisualContainer');
+  const merCont = document.getElementById('viewMermaidContainer');
+  const btnVis = document.getElementById('btnViewVisual');
+  const btnMer = document.getElementById('btnViewMermaid');
+  
+  if (view === 'visual') {
+    if (visCont) visCont.classList.remove('hidden');
+    if (merCont) merCont.classList.add('hidden');
+    if (btnVis) {
+      btnVis.className = 'px-2.5 py-1 rounded-lg bg-blue-600 text-white font-medium shadow transition text-[11px]';
+    }
+    if (btnMer) {
+      btnMer.className = 'px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition text-[11px]';
+    }
+  } else {
+    if (visCont) visCont.classList.add('hidden');
+    if (merCont) merCont.classList.remove('hidden');
+    if (btnMer) {
+      btnMer.className = 'px-2.5 py-1 rounded-lg bg-blue-600 text-white font-medium shadow transition text-[11px]';
+    }
+    if (btnVis) {
+      btnVis.className = 'px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition text-[11px]';
+    }
+    renderMermaidDiagram();
+  }
+}
+
+function updateActivityDiagram(data) {
+  const sub = data.submission;
+  const badge = document.getElementById('flowStatusBadge');
+  
+  // 1. Update NLU Detail
+  const nluDetail = document.getElementById('actNluDetail');
+  if (nluDetail && data.nlp) {
+    nluDetail.innerHTML = `Clean: <span class="text-white font-semibold">"${data.nlp.clean_query}"</span>`;
+  }
+  
+  // 2. Update Temporal Detail
+  const tempDetail = document.getElementById('actTempDetail');
+  if (tempDetail) {
+    if (data.temporal) {
+      tempDetail.innerHTML = `Range: <span class="text-white font-semibold">${data.temporal.start_date || '?'} &rarr; ${data.temporal.end_date || '?'}</span>`;
+    } else {
+      tempDetail.innerHTML = `<span class="text-slate-500">Mặc định (Không có mốc ngày)</span>`;
+    }
+  }
+  
+  // 3. Update Intent Detail
+  const intentDetail = document.getElementById('actIntentDetail');
+  if (intentDetail && data.plan) {
+    intentDetail.innerHTML = `Intent: <span class="text-white font-semibold">${data.plan.intent}</span> | Conf: <span class="text-indigo-400">${(data.plan.confidence * 100).toFixed(0)}%</span>`;
+  }
+  
+  // 4. Update Decision & Branches
+  const brAbstain = document.getElementById('branchAbstain');
+  const brSuccess = document.getElementById('branchSuccess');
+  const decisionNode = document.getElementById('flowNodeDecision');
+  
+  if (sub.type === 'abstain' || sub.type === 'unanswerable') {
+    if (badge) {
+      badge.className = 'px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-mono text-[11px] flex items-center gap-1.5';
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span> PA GUARD: ${sub.type.toUpperCase()} (0đ)`;
+    }
+    if (brAbstain) {
+      brAbstain.classList.add('flow-node-abstain');
+      brAbstain.classList.remove('opacity-40');
+    }
+    if (brSuccess) {
+      brSuccess.classList.remove('flow-node-success');
+      brSuccess.classList.add('opacity-40');
+    }
+    if (decisionNode) {
+      decisionNode.classList.add('flow-node-abstain');
+      decisionNode.classList.remove('flow-node-success');
+    }
+  } else {
+    if (badge) {
+      badge.className = 'px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono text-[11px] flex items-center gap-1.5';
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> EXECUTED: ${sub.type.toUpperCase()} (+1đ)`;
+    }
+    if (brSuccess) {
+      brSuccess.classList.add('flow-node-success');
+      brSuccess.classList.remove('opacity-40');
+    }
+    if (brAbstain) {
+      brAbstain.classList.remove('flow-node-abstain');
+      brAbstain.classList.add('opacity-40');
+    }
+    if (decisionNode) {
+      decisionNode.classList.add('flow-node-success');
+      decisionNode.classList.remove('flow-node-abstain');
+    }
+  }
 }
 
 async function ask() {
@@ -406,6 +564,12 @@ async function ask() {
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Đang xử lý...';
+  }
+
+  const flowBadge = document.getElementById('flowStatusBadge');
+  if (flowBadge) {
+    flowBadge.className = 'px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40 font-mono text-[11px] flex items-center gap-1.5';
+    flowBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping"></span> RUNNING (Đang suy luận...)';
   }
 
   try {
@@ -508,6 +672,9 @@ function renderResult(data) {
   if (sqlEl) {
     sqlEl.textContent = data.plan.sql || '-- Không có câu lệnh SQL (Truy vấn được xử lý đặc biệt hoặc từ chối)';
   }
+
+  // Update Activity Diagram flow
+  updateActivityDiagram(data);
 }
 
 window.onload = init;
