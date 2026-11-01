@@ -13,12 +13,14 @@ class CompiledQueryPlan:
         intent: str,
         expected_type: AnswerType,
         sql: Optional[str] = None,
+        params: Tuple[Any, ...] = (),
         confidence: float = 1.0,
         unanswerable_reason: Optional[str] = None,
     ):
         self.intent = intent
         self.expected_type = expected_type
         self.sql = sql
+        self.params = params
         self.confidence = confidence
         self.unanswerable_reason = unanswerable_reason
 
@@ -257,15 +259,25 @@ class BusinessRuleCompiler:
         if nlp_info.has_specific_order and (nlp_info.is_revenue_query or "giá trị" in clean_q or "bao nhiêu" in clean_q):
             if not sales_table or not order_id_col or not amount_expr:
                 return CompiledQueryPlan(intent="order_specific", expected_type=AnswerType.UNANSWERABLE)
-            sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` WHERE UPPER(`{order_id_col}`) = '{nlp_info.has_specific_order}';"
-            return CompiledQueryPlan(intent="order_specific", expected_type=AnswerType.NUMBER, sql=sql.strip())
+            sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` WHERE UPPER(`{order_id_col}`) = ?;"
+            return CompiledQueryPlan(
+                intent="order_specific",
+                expected_type=AnswerType.NUMBER,
+                sql=sql.strip(),
+                params=(nlp_info.has_specific_order.upper(),),
+            )
 
         # 8. Intent: Specific Customer Debt lookup (e.g. "Tổng nợ của khách hàng Bs Hùng là bao nhiêu?")
         if nlp_info.has_specific_customer and nlp_info.is_debt_query:
             if not debt_table or not debt_cust_col or not debt_amount_col:
                 return CompiledQueryPlan(intent="customer_debt_specific", expected_type=AnswerType.UNANSWERABLE)
-            sql = f"SELECT ROUND(COALESCE(SUM(`{debt_amount_col}`), 0), 2) FROM `{debt_table}` WHERE LOWER(`{debt_cust_col}`) LIKE '%{nlp_info.has_specific_customer.lower()}%';"
-            return CompiledQueryPlan(intent="customer_debt_specific", expected_type=AnswerType.NUMBER, sql=sql.strip())
+            sql = f"SELECT ROUND(COALESCE(SUM(`{debt_amount_col}`), 0), 2) FROM `{debt_table}` WHERE LOWER(`{debt_cust_col}`) LIKE ?;"
+            return CompiledQueryPlan(
+                intent="customer_debt_specific",
+                expected_type=AnswerType.NUMBER,
+                sql=sql.strip(),
+                params=(f"%{nlp_info.has_specific_customer.lower()}%",),
+            )
 
         # 9. Intent: Cancellations (must be checked before order_count to avoid counting cancellations as orders!)
         if nlp_info.is_cancellation_query:
@@ -407,9 +419,29 @@ class BusinessRuleCompiler:
             """
             return CompiledQueryPlan(intent="top_customer", expected_type=AnswerType.STRING, sql=sql.strip())
 
-        # 14. Intent: Unsold products check (DIA-02)
+        # 14. Intent: Unsold products check (Grounded against Catalog and Sales)
         if nlp_info.is_unsold_query:
-            return CompiledQueryPlan(intent="unsold_check", expected_type=AnswerType.BOOLEAN, sql="SELECT 0;", confidence=0.85)
+            catalog_tbl, catalog_prod_col = cls._find_catalog_table(tables, sales_table, prod_name_col)
+            if not sales_table:
+                return CompiledQueryPlan(intent="unsold_check", expected_type=AnswerType.UNANSWERABLE, unanswerable_reason="Missing sales table.")
+
+            # Grounding check: without catalog/inventory table, we cannot infer unsold products from sales logs alone
+            if not catalog_tbl or not catalog_prod_col:
+                return CompiledQueryPlan(
+                    intent="unsold_check",
+                    expected_type=AnswerType.UNANSWERABLE,
+                    unanswerable_reason="Chỉ có bảng giao dịch, thiếu bảng danh mục sản phẩm (catalog) hoặc kho để đối chiếu sản phẩm chưa bán."
+                )
+
+            where_str = build_where_clause()
+            sales_subquery = f"SELECT DISTINCT `{prod_name_col}` FROM `{sales_table}` {where_str}" if prod_name_col else f"SELECT DISTINCT 1 FROM `{sales_table}`"
+            sql = f"SELECT CASE WHEN EXISTS (SELECT 1 FROM `{catalog_tbl}` WHERE `{catalog_prod_col}` NOT IN ({sales_subquery})) THEN 1 ELSE 0 END;"
+            return CompiledQueryPlan(
+                intent="unsold_check",
+                expected_type=AnswerType.BOOLEAN,
+                sql=sql.strip(),
+                confidence=0.92,
+            )
 
         # 15. Intent: Specific Product Quantity / Revenue query
         if nlp_info.has_specific_product and not nlp_info.is_revenue_ranking and not nlp_info.is_quantity_ranking:
@@ -431,13 +463,14 @@ class BusinessRuleCompiler:
 
             where_str = build_where_clause()
             order_dir = "ASC" if nlp_info.is_lowest_ranking else "DESC"
+            group_expr = f"`{prod_name_col}`, `{prod_code_col}`" if prod_code_col else f"`{prod_name_col}`"
             tie_breaker = f", `{prod_code_col}` ASC" if prod_code_col else f", `{prod_name_col}` ASC"
 
             sql = f"""
             SELECT `{prod_name_col}`
             FROM `{sales_table}`
             {where_str}
-            GROUP BY `{prod_name_col}`
+            GROUP BY {group_expr}
             ORDER BY SUM({amount_expr}) {order_dir} {tie_breaker}
             LIMIT 1;
             """
@@ -465,12 +498,13 @@ class BusinessRuleCompiler:
                 secondary_sort = ""
 
             tie_breaker = f"{secondary_sort}, `{prod_code_col}` ASC" if prod_code_col else f"{secondary_sort}, `{prod_name_col}` ASC"
+            group_expr = f"`{prod_name_col}`, `{prod_code_col}`" if prod_code_col else f"`{prod_name_col}`"
 
             sql = f"""
             SELECT `{prod_name_col}`
             FROM `{sales_table}`
             {where_str}
-            GROUP BY `{prod_name_col}`
+            GROUP BY {group_expr}
             ORDER BY {sum_target} {order_dir} {tie_breaker}
             LIMIT 1;
             """
@@ -617,3 +651,30 @@ class BusinessRuleCompiler:
                 debt_amount_col = c.name
 
         return debt_table, debt_cust_col, debt_amount_col
+
+    @classmethod
+    def _find_catalog_table(
+        cls, tables: Dict[str, TableInfo], sales_table: Optional[str], sales_prod_col: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Find catalog/inventory dimension table and matching product column."""
+        for t_name, t_info in tables.items():
+            if t_name == sales_table:
+                continue
+            lower = t_name.lower()
+            if any(k in lower for k in ["san_pham", "sp", "hang_hoa", "danh_muc", "kho", "ton_kho", "catalog", "products"]):
+                is_sales_code = bool(sales_prod_col and any(k in sales_prod_col.lower() for k in ["ma", "code", "id"]))
+                if is_sales_code:
+                    for c in t_info.columns:
+                        if any(k in c.name.lower() for k in ["ma_sp", "ma_thuoc", "ma_san_pham", "product_id", "code"]):
+                            return t_name, c.name
+                else:
+                    for c in t_info.columns:
+                        if any(k in c.name.lower() for k in ["ten_sp", "ten_thuoc", "ten_san_pham", "ten_hang", "name"]):
+                            return t_name, c.name
+
+                for c in t_info.columns:
+                    if c.semantic_role == "product":
+                        return t_name, c.name
+                if t_info.columns:
+                    return t_name, t_info.columns[0].name
+        return None, None

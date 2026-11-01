@@ -158,7 +158,13 @@ def evaluate_single_answer(
     ref_type = ref.get("type")
     ref_ans = ref.get("answer")
 
-    # Rule: type abstain or missing answer is an abstain
+    # If reference expects abstain (e.g. ambiguous query):
+    if ref_type == AnswerType.ABSTAIN.value:
+        if pred_type == AnswerType.ABSTAIN.value:
+            return EvaluationResult.CORRECT
+        return EvaluationResult.WRONG
+
+    # Rule: type abstain or missing answer is an abstain (scores 0, avoids penalty)
     if pred_type == AnswerType.ABSTAIN.value or pred_type is None:
         return EvaluationResult.ABSTAIN
 

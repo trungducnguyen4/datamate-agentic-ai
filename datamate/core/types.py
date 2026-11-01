@@ -49,3 +49,14 @@ class EvaluationResult(str, Enum):
     CORRECT = "correct"
     WRONG = "wrong"
     ABSTAIN = "abstain"
+
+
+class ExecutionTrace(BaseModel):
+    id: str
+    status: str  # "SUCCESS", "UNANSWERABLE", "ABSTAIN_BUSINESS_RULE", "EXECUTION_ERROR"
+    intent: Optional[str] = None
+    sql: Optional[str] = None
+    params: Optional[List[Any]] = None
+    error_phase: Optional[str] = None  # "LOADER", "SCHEMA", "COMPILER", "SQL_EXECUTION", "FORMATTER"
+    error_message: Optional[str] = None
+    latency_ms: float = 0.0

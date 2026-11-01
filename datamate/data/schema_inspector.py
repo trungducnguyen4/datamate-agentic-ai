@@ -17,12 +17,27 @@ class ColumnInfo(BaseModel):
     data_type: str
     sample_values: List[Any] = []
     semantic_role: Optional[str] = None
+    is_primary_key: bool = False
+    is_unique: bool = False
+
+
+class TableRelation(BaseModel):
+    from_table: str
+    from_column: str
+    to_table: str
+    to_column: str
+    relation_type: str = "MANY_TO_ONE"  # "MANY_TO_ONE", "ONE_TO_MANY", "ONE_TO_ONE"
+    confidence: float = 1.0
 
 
 class TableInfo(BaseModel):
     name: str
     row_count: int
     columns: List[ColumnInfo]
+    primary_key: Optional[str] = None
+    table_kind: str = "unknown"  # "fact_sales", "fact_debt", "dim_product", "dim_customer", "dim_inventory", "unknown"
+    grain: Optional[str] = None
+    relations: List[TableRelation] = []
 
 
 class SchemaInspector:
@@ -75,21 +90,164 @@ class SchemaInspector:
                 pass
 
             col_infos = []
+            pk_col = None
             for col in cols_meta:
                 c_name = col[1]
                 c_type = col[2] or "TEXT"
+                is_pk = bool(col[5] > 0)
                 samples = sample_dict.get(c_name, [])
                 role = cls._infer_role(c_name, samples)
+
+                is_unique = False
+                if is_pk:
+                    pk_col = c_name
+                    is_unique = True
+                elif count > 0 and count <= 50000:
+                    try:
+                        cursor.execute(f"SELECT COUNT(DISTINCT `{c_name}`) FROM `{tbl}`;")
+                        dist_cnt = cursor.fetchone()[0]
+                        if dist_cnt == count:
+                            is_unique = True
+                            if not pk_col and any(k in c_name.lower() for k in ["ma_", "id", "code"]):
+                                pk_col = c_name
+                    except Exception:
+                        pass
+
                 col_infos.append(
                     ColumnInfo(
                         name=c_name,
                         data_type=c_type,
                         sample_values=samples,
                         semantic_role=role,
+                        is_primary_key=is_pk,
+                        is_unique=is_unique,
                     )
                 )
 
-            tables[tbl] = TableInfo(name=tbl, row_count=count, columns=col_infos)
+            # Infer Table Kind and Grain
+            table_kind = "unknown"
+            grain = None
+            roles_in_table = set(c.semantic_role for c in col_infos if c.semantic_role)
+            tbl_clean = strip_accents(tbl)
+
+            if "date" in roles_in_table and ("total_amount" in roles_in_table or "quantity" in roles_in_table):
+                table_kind = "fact_sales"
+                grain = "transaction_item" if "quantity" in roles_in_table else "order_header"
+            elif any(k in tbl_clean for k in ["hoa_don", "don_hang", "ban_hang", "sales", "giao_dich"]):
+                table_kind = "fact_sales"
+                grain = "transaction_item"
+            elif "debt" in roles_in_table or any(k in tbl_clean for k in ["so_no", "cong_no", "debt"]):
+                table_kind = "fact_debt"
+                grain = "customer_debt_balance"
+            elif ("product" in roles_in_table and ("unit_price" in roles_in_table or "stock" in roles_in_table or "cost" in roles_in_table)) or any(k in tbl_clean for k in ["san_pham", "hang_hoa", "danh_muc", "catalog"]):
+                table_kind = "dim_product"
+                grain = "product_catalog"
+            elif "customer" in roles_in_table and not ("total_amount" in roles_in_table or "date" in roles_in_table):
+                table_kind = "dim_customer"
+                grain = "customer_directory"
+            elif "stock" in roles_in_table or any(k in tbl_clean for k in ["ton_kho", "kho", "stock"]):
+                table_kind = "dim_inventory"
+                grain = "inventory_snapshot"
+
+            tables[tbl] = TableInfo(
+                name=tbl,
+                row_count=count,
+                columns=col_infos,
+                primary_key=pk_col,
+                table_kind=table_kind,
+                grain=grain,
+                relations=[],
+            )
+
+        # Infer Relationships (Explicit FKs & Semantic Joins)
+        for tbl, t_info in tables.items():
+            # 1. Explicit SQLite foreign keys
+            try:
+                cursor.execute(f"PRAGMA foreign_key_list(`{tbl}`);")
+                for fk_row in cursor.fetchall():
+                    target_tbl = fk_row[2]
+                    from_c = fk_row[3]
+                    to_c = fk_row[4]
+                    if target_tbl in tables:
+                        t_info.relations.append(
+                            TableRelation(
+                                from_table=tbl,
+                                from_column=from_c,
+                                to_table=target_tbl,
+                                to_column=to_c,
+                                relation_type="MANY_TO_ONE",
+                                confidence=1.0,
+                            )
+                        )
+            except Exception:
+                pass
+
+            # 2. Semantic FK / Name Overlap Detection
+            for other_tbl, other_info in tables.items():
+                if tbl == other_tbl:
+                    continue
+
+                # Fact-to-Dimension product relationship
+                if t_info.table_kind == "fact_sales" and other_info.table_kind in ("dim_product", "dim_inventory"):
+                    matched_pair = None
+                    code_a = next((c.name for c in t_info.columns if c.semantic_role == "product" and any(k in c.name.lower() for k in ["ma", "code", "id"])), None)
+                    code_b = next((c.name for c in other_info.columns if c.semantic_role == "product" and any(k in c.name.lower() for k in ["ma", "code", "id"])), None)
+                    if code_a and code_b:
+                        matched_pair = (code_a, code_b)
+                    else:
+                        name_a = next((c.name for c in t_info.columns if c.semantic_role == "product" and any(k in c.name.lower() for k in ["ten", "name"])), None)
+                        name_b = next((c.name for c in other_info.columns if c.semantic_role == "product" and any(k in c.name.lower() for k in ["ten", "name"])), None)
+                        if name_a and name_b:
+                            matched_pair = (name_a, name_b)
+
+                    if not matched_pair:
+                        col_a = next((c.name for c in t_info.columns if c.semantic_role == "product"), None)
+                        col_b = other_info.primary_key or next((c.name for c in other_info.columns if c.semantic_role == "product"), None)
+                        if col_a and col_b:
+                            matched_pair = (col_a, col_b)
+
+                    if matched_pair:
+                        t_info.relations.append(
+                            TableRelation(
+                                from_table=tbl,
+                                from_column=matched_pair[0],
+                                to_table=other_tbl,
+                                to_column=matched_pair[1],
+                                relation_type="MANY_TO_ONE",
+                                confidence=0.95,
+                            )
+                        )
+
+                # Fact-to-Fact/Dim customer relationship (sales to customer / debt)
+                if t_info.table_kind == "fact_sales" and other_info.table_kind in ("fact_debt", "dim_customer"):
+                    matched_pair = None
+                    code_a = next((c.name for c in t_info.columns if c.semantic_role == "customer" and any(k in c.name.lower() for k in ["ma", "code", "id"])), None)
+                    code_b = next((c.name for c in other_info.columns if c.semantic_role == "customer" and any(k in c.name.lower() for k in ["ma", "code", "id"])), None)
+                    if code_a and code_b:
+                        matched_pair = (code_a, code_b)
+                    else:
+                        name_a = next((c.name for c in t_info.columns if c.semantic_role == "customer" and any(k in c.name.lower() for k in ["ten", "name", "khach"])), None)
+                        name_b = next((c.name for c in other_info.columns if c.semantic_role == "customer" and any(k in c.name.lower() for k in ["ten", "name", "khach"])), None)
+                        if name_a and name_b:
+                            matched_pair = (name_a, name_b)
+
+                    if not matched_pair:
+                        col_a = next((c.name for c in t_info.columns if c.semantic_role == "customer"), None)
+                        col_b = other_info.primary_key or next((c.name for c in other_info.columns if c.semantic_role == "customer"), None)
+                        if col_a and col_b:
+                            matched_pair = (col_a, col_b)
+
+                    if matched_pair:
+                        t_info.relations.append(
+                            TableRelation(
+                                from_table=tbl,
+                                from_column=matched_pair[0],
+                                to_table=other_tbl,
+                                to_column=matched_pair[1],
+                                relation_type="MANY_TO_ONE",
+                                confidence=0.90,
+                            )
+                        )
 
         return tables
 

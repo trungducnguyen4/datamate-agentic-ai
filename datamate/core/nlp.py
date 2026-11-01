@@ -385,14 +385,16 @@ class VietnameseNLP:
                     break
 
         # Step 5: Clean query by stripping polite fluff and business prefixes
+        # Note: Avoid matching 'hàng' when part of 'khách hàng', 'cửa hàng', 'đơn hàng', 'giao hàng', 'ngân hàng'
+        q_no_common_hang = re.sub(r"\b(khách hàng|cửa hàng|đơn hàng|giao hàng|ngân hàng|mua hàng|bán hàng)\b", " ", q)
         is_asking_for_product = bool(
-            re.search(r"\b(sản phẩm|mặt hàng|thuốc|món|hàng|sp|dịch vụ|loại hàng|mặt hàng nào|sản phẩm nào|thuốc nào|món nào|hàng nào|sp nào)\b", q)
+            re.search(r"\b(sản phẩm|mặt hàng|thuốc|món|hàng|sp|dịch vụ|loại hàng|hàng hóa|mặt hàng nào|sản phẩm nào|thuốc nào|món nào|hàng nào|sp nào)\b", q_no_common_hang)
         )
 
         is_customer_query = (
             bool(
                 re.search(r"\b(khách nào|khách hàng nào|ai mua|ai là khách|khách sộp|khách chi tiêu|khách quen|khách vip|khách mua nhiều|khách hay đổi ý|top.*khách|khách trung thành|khách.*nhiều đơn|khách.*nhiều tiền)\b", q)
-                or (re.search(r"\b(ai|người nào|khách nào)\b", q) and re.search(r"\b(mua|chi tiêu|đặt đơn|sộp)\b", q))
+                or (re.search(r"\b(ai|người nào|khách nào|khách hàng nào)\b", q) and re.search(r"\b(mua|chi tiêu|đặt đơn|sộp|đóng góp)\b", q))
             )
             and not is_asking_for_product
         )

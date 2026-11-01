@@ -4,23 +4,24 @@ let testedCases = new Set();
 let currentDataset = 'public_test';
 let currentSampleQuestions = [];
 let sampleOffset = 0;
+let qaTestResults = null;
 
 const CHECKLIST_ITEMS = [
-  { id: "VN-02", biz: "biz_099", q: "Tháng này mặt hàng nào bán chạy nhất?", desc: "Câu tự nhiên, chuẩn (Số lượng)", date: "2026-03-04" },
-  { id: "VN-03", biz: "biz_099", q: "Anh/chị xem giúp em tháng này thuốc nào bán chạy nhất với.", desc: "Xưng hô và lịch sự", date: "2026-03-04" },
-  { id: "CHAT-01", biz: "biz_099", q: "sp bán dc nhiều nhất tuần rồi là gì", desc: "Viết tắt, benchmark", date: "2026-03-04" },
-  { id: "CHAT-06", biz: "biz_099", q: "thang nay mat hang nao ban chay nhat", desc: "Tiếng Việt không dấu", date: "2026-03-04" },
-  { id: "CHAT-07", biz: "biz_099", q: "sp nào bán dc nhìu nhất tuần rùi z shop", desc: "Teencode, tiếng lóng", date: "2026-03-04" },
-  { id: "DIA-04", biz: "biz_099", q: "Bữa giờ thuốc nào bán chạy nhất vậy?", desc: "Phương ngữ Nam, thời gian mơ hồ -> ABSTAIN", date: "2026-03-04" },
-  { id: "DIA-06", biz: "biz_099", q: "Tháng ni thuốc mô bán chạy nhất rứa?", desc: "Phương ngữ Trung", date: "2026-03-04" },
-  { id: "SEM-01", biz: "biz_fixture_probe", q: "Sản phẩm nào bán được nhiều nhất?", desc: "Số lượng (Sản phẩm A)", date: "2026-03-04" },
-  { id: "SEM-02", biz: "biz_fixture_probe", q: "Sản phẩm nào thu về nhiều tiền nhất?", desc: "Doanh thu (Sản phẩm B)", date: "2026-03-04" },
-  { id: "SEM-03", biz: "biz_fixture_probe", q: "Sản phẩm nào có lợi nhuận cao nhất?", desc: "Cần giá vốn -> UNANSWERABLE", date: "2026-03-04" },
-  { id: "TIME-04", biz: "biz_099", q: "7 ngày gần đây bán được bao nhiêu?", desc: "Khoảng thời gian động 7 ngày", date: "2026-03-04" },
-  { id: "TIME-06", biz: "biz_099", q: "Từ sau Tết đến giờ bán được bao nhiêu?", desc: "Lịch Âm (Tết Bính Ngọ)", date: "2026-03-04" },
-  { id: "NEG-01", biz: "biz_099", q: "Lợi nhuận ròng tháng này bao nhiêu?", desc: "Thiếu chi phí -> UNANSWERABLE", date: "2026-03-04" },
-  { id: "NEG-04", biz: "biz_099", q: "Tại sao doanh thu tháng này giảm?", desc: "Không bịa nguyên nhân -> UNANSWERABLE", date: "2026-03-04" },
-  { id: "NEG-09", biz: "biz_099", q: "Thuốc nào bán chạy nhất trong ngày 2026-03-10?", desc: "Không có giao dịch -> Không tự bịa sản phẩm", date: "2026-03-10" }
+  { id: "VN-02", biz: "biz_099", q: "Tháng này mặt hàng nào bán chạy nhất?", desc: "Câu tự nhiên, chuẩn (Số lượng)", date: "2026-03-04", expected_type: "string", expected_answer: "Panadol Extra đỏ vỉ" },
+  { id: "VN-03", biz: "biz_099", q: "Anh/chị xem giúp em tháng này thuốc nào bán chạy nhất với.", desc: "Xưng hô và lịch sự", date: "2026-03-04", expected_type: "string", expected_answer: "Panadol Extra đỏ vỉ" },
+  { id: "CHAT-01", biz: "biz_099", q: "sp bán dc nhiều nhất tuần rồi là gì", desc: "Viết tắt, benchmark", date: "2026-03-04", expected_type: "string", expected_answer: "Panadol Extra đỏ vỉ" },
+  { id: "CHAT-06", biz: "biz_099", q: "thang nay mat hang nao ban chay nhat", desc: "Tiếng Việt không dấu", date: "2026-03-04", expected_type: "string", expected_answer: "Panadol Extra đỏ vỉ" },
+  { id: "CHAT-07", biz: "biz_099", q: "sp nào bán dc nhìu nhất tuần rùi z shop", desc: "Teencode, tiếng lóng", date: "2026-03-04", expected_type: "string", expected_answer: "Panadol Extra đỏ vỉ" },
+  { id: "DIA-04", biz: "biz_099", q: "Bữa giờ thuốc nào bán chạy nhất vậy?", desc: "Phương ngữ Nam, thời gian mơ hồ -> ABSTAIN", date: "2026-03-04", expected_type: "abstain", expected_answer: null },
+  { id: "DIA-06", biz: "biz_099", q: "Tháng ni thuốc mô bán chạy nhất rứa?", desc: "Phương ngữ Trung", date: "2026-03-04", expected_type: "string", expected_answer: "Panadol Extra đỏ vỉ" },
+  { id: "SEM-01", biz: "biz_fixture_probe", q: "Sản phẩm nào bán được nhiều nhất?", desc: "Số lượng (Sản phẩm A)", date: "2026-03-04", expected_type: "string", expected_answer: "Sản phẩm A" },
+  { id: "SEM-02", biz: "biz_fixture_probe", q: "Sản phẩm nào thu về nhiều tiền nhất?", desc: "Doanh thu (Sản phẩm B)", date: "2026-03-04", expected_type: "string", expected_answer: "Sản phẩm B" },
+  { id: "SEM-03", biz: "biz_fixture_probe", q: "Sản phẩm nào có lợi nhuận cao nhất?", desc: "Cần giá vốn -> UNANSWERABLE", date: "2026-03-04", expected_type: "unanswerable", expected_answer: null },
+  { id: "SEM-04", biz: "biz_099", q: "Panadol đỏ còn hạn sử dụng đến khi nào?", desc: "Cần HSD -> UNANSWERABLE", date: "2026-03-04", expected_type: "unanswerable", expected_answer: null },
+  { id: "NEG-04", biz: "biz_099", q: "Tại sao tuần rồi doanh số giảm?", desc: "Câu hỏi Why/Nguyên nhân -> UNANSWERABLE", date: "2026-03-04", expected_type: "unanswerable", expected_answer: null },
+  { id: "NEG-05", biz: "biz_099", q: "Tháng sau dự đoán bán được bao nhiêu cái nhiệt kế?", desc: "Dự đoán tương lai -> UNANSWERABLE", date: "2026-03-04", expected_type: "unanswerable", expected_answer: null },
+  { id: "LUNAR-01", biz: "biz_099", q: "Từ sau Tết đến giờ bán được bao nhiêu tiền?", desc: "Lịch âm (Sau Tết Bính Ngọ)", date: "2026-03-04", expected_type: "number", expected_answer: 6425000 },
+  { id: "EMPTY-01", biz: "biz_empty_sales", q: "Mặt hàng nào bán chạy nhất tháng này?", desc: "Tiệm mới mở 0 đơn -> ABSTAIN", date: "2026-03-04", expected_type: "abstain", expected_answer: null }
 ];
 
 async function init() {
@@ -196,17 +197,59 @@ function renderSamplePills() {
 
 function renderChecklist() {
   const container = document.getElementById('checklistContainer');
-  const prog = document.getElementById('qaProgress');
-  if (prog) prog.textContent = `${testedCases.size}/${CHECKLIST_ITEMS.length}`;
   if (!container) return;
 
+  const items = qaTestResults ? qaTestResults.results : CHECKLIST_ITEMS;
+  const prog = document.getElementById('qaProgress');
+  if (prog) {
+    if (qaTestResults) {
+      prog.textContent = `${qaTestResults.summary.passed}/${qaTestResults.summary.total} PASS`;
+    } else {
+      prog.textContent = `${testedCases.size}/${CHECKLIST_ITEMS.length}`;
+    }
+  }
+
   container.innerHTML = '';
-  CHECKLIST_ITEMS.forEach(item => {
-    const isDone = testedCases.has(item.id);
+  items.forEach(item => {
+    const status = item.status || (testedCases.has(item.id) ? 'TESTED' : 'PENDING');
+
+    let statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-800 text-slate-400">PENDING</span>';
+    let cardBorder = 'border-slate-800 hover:border-slate-700 bg-slate-900/60';
+
+    if (status === 'PASS') {
+      statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">PASS (+1)</span>';
+      cardBorder = 'border-emerald-500/30 bg-emerald-950/10 hover:border-emerald-500/50';
+    } else if (status === 'FAIL') {
+      statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-red-500/10 border border-red-500/30 text-red-400">FAIL (-1)</span>';
+      cardBorder = 'border-red-500/30 bg-red-950/10 hover:border-red-500/50';
+    } else if (status === 'ABSTAIN') {
+      statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-400">ABSTAIN (0)</span>';
+      cardBorder = 'border-amber-500/30 bg-amber-950/10 hover:border-amber-500/50';
+    }
+
     const div = document.createElement('div');
-    div.className = `p-3 rounded-xl border flex items-center justify-between transition cursor-pointer ${
-      isDone ? 'bg-purple-950/30 border-purple-500/40' : 'bg-slate-900 border-slate-800 hover:border-slate-700'
-    }`;
+    div.className = `p-3.5 rounded-xl border flex flex-col gap-2 transition cursor-pointer ${cardBorder}`;
+
+    div.innerHTML = `
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <span class="font-mono text-xs font-bold text-purple-400 bg-purple-950/40 px-2 py-0.5 rounded border border-purple-500/20">${item.id}</span>
+          <span class="text-xs font-medium text-white">${item.q}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          ${item.latency_ms ? `<span class="text-[10px] font-mono text-slate-400"><i class="fa-solid fa-bolt text-amber-400"></i> ${item.latency_ms}ms</span>` : ''}
+          ${statusBadge}
+        </div>
+      </div>
+      <div class="text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800/60 pt-2">
+        <div><i class="fa-solid fa-tag text-slate-500"></i> ${item.desc} • <span class="font-mono text-purple-300">${item.biz}</span></div>
+        <div class="flex items-center gap-3">
+          <div><span class="text-slate-500">Exp:</span> <span class="font-mono text-slate-300 font-semibold">${item.expected_type}: ${item.expected_answer !== null && item.expected_answer !== undefined ? item.expected_answer : 'null'}</span></div>
+          ${item.actual_type ? `<div><span class="text-slate-500">Act:</span> <span class="font-mono text-emerald-300 font-semibold">${item.actual_type}: ${item.actual_answer !== null && item.actual_answer !== undefined ? item.actual_answer : 'null'}</span></div>` : ''}
+        </div>
+      </div>
+    `;
+
     div.onclick = async () => {
       const sel = document.getElementById('businessSelect');
       if (sel) {
@@ -222,29 +265,54 @@ function renderChecklist() {
       if (modal) modal.classList.add('hidden');
 
       testedCases.add(item.id);
-      renderChecklist();
       await ask();
     };
 
-    div.innerHTML = `
-      <div class="flex items-center gap-3">
-        <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs ${
-          isDone ? 'bg-purple-500 text-white font-bold' : 'bg-slate-800 text-slate-500'
-        }">
-          ${isDone ? '<i class="fa-solid fa-check text-[10px]"></i>' : '<i class="fa-solid fa-play text-[9px]"></i>'}
-        </div>
-        <div>
-          <div class="text-xs font-semibold text-white flex items-center gap-2">
-            <span class="font-mono text-purple-400">${item.id}</span>
-            <span>${item.q}</span>
-          </div>
-          <div class="text-[11px] text-slate-400 mt-0.5">${item.desc} • ${item.biz}</div>
-        </div>
-      </div>
-      <button class="text-xs px-2.5 py-1 rounded bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700">Chạy Test</button>
-    `;
     container.appendChild(div);
   });
+}
+
+async function runAllQATests() {
+  const runBtn = document.getElementById('runAllTestsBtn');
+  if (runBtn) {
+    runBtn.disabled = true;
+    runBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running Tests...';
+  }
+
+  try {
+    const res = await fetch('/api/run-all-tests', { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to run QA tests');
+    const data = await res.json();
+    qaTestResults = data;
+    updateQAScorecard(data.summary);
+    renderChecklist();
+  } catch (err) {
+    console.error(err);
+    alert('Lỗi khi chạy QA tests: ' + err.message);
+  } finally {
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.innerHTML = '<i class="fa-solid fa-play"></i> Run All 15 Tests';
+    }
+  }
+}
+
+function updateQAScorecard(summary) {
+  if (!summary) return;
+  const accEl = document.getElementById('qaScoreAccuracy');
+  if (accEl) accEl.textContent = `${summary.accuracy_pct}%`;
+
+  const scoreEl = document.getElementById('qaScorePenalized');
+  if (scoreEl) scoreEl.textContent = `+${summary.penalized_score} / ${summary.total}`;
+
+  const countsEl = document.getElementById('qaScoreCounts');
+  if (countsEl) countsEl.textContent = `${summary.passed} PASS / ${summary.failed} FAIL`;
+
+  const latEl = document.getElementById('qaScoreLatency');
+  if (latEl) latEl.textContent = `${summary.avg_latency_ms} ms`;
+
+  const prog = document.getElementById('qaProgress');
+  if (prog) prog.textContent = `${summary.passed}/${summary.total}`;
 }
 
 function setupEvents() {
@@ -283,6 +351,9 @@ function setupEvents() {
     if (modal) modal.classList.remove('hidden');
   };
 
+  const runAllBtn = document.getElementById('runAllTestsBtn');
+  if (runAllBtn) runAllBtn.onclick = runAllQATests;
+
   const closeChkBtn = document.getElementById('closeChecklistBtn');
   if (closeChkBtn) closeChkBtn.onclick = () => {
     const modal = document.getElementById('checklistModal');
@@ -312,6 +383,164 @@ function setupEvents() {
       }
     };
   }
+
+  // Activity Diagram View Switchers
+  const btnVisual = document.getElementById('btnViewVisual');
+  if (btnVisual) btnVisual.onclick = () => switchFlowView('visual');
+
+  const btnMermaid = document.getElementById('btnViewMermaid');
+  if (btnMermaid) btnMermaid.onclick = () => switchFlowView('mermaid');
+
+  const copyMermaidBtn = document.getElementById('copyMermaidBtn');
+  if (copyMermaidBtn) {
+    copyMermaidBtn.onclick = () => {
+      navigator.clipboard.writeText(MERMAID_DIAGRAM_DEFINITION);
+      alert('Đã sao chép mã Mermaid Activity Diagram!');
+    };
+  }
+}
+
+const MERMAID_DIAGRAM_DEFINITION = `stateDiagram-v2
+    [*] --> InitialState: 1. Nhận câu hỏi & as_of_date
+    InitialState --> NLU: 2. Vietnamese NLU & Text Normalization
+    NLU --> Temporal: 3. Temporal Engine (Âm/Dương lịch)
+    Temporal --> IntentSchema: 4. Intent & Multi-table Schema Mapping
+    
+    state "Kiểm định Bằng chứng (PA Guard)" as Decision <<choice>>
+    IntentSchema --> Decision
+    
+    Decision --> PAGuardAbstain: [Mơ hồ / Thiếu dữ liệu / Causal]
+    Decision --> SafeSQLExecution: [Hợp lệ & Đầy đủ bằng chứng]
+    
+    state "Nhánh An Toàn (0đ)" as PAGuardAbstain {
+        TuChoi: 5A. Quyết định ABSTAIN hoặc UNANSWERABLE
+        BaoToanDiem: Bảo toàn 0đ (Tránh bị phạt -1đ)
+        TuChoi --> BaoToanDiem
+    }
+    
+    state "Nhánh Thực Thi (+1đ)" as SafeSQLExecution {
+        SinhSQL: 5B. Parameterized SQL Compilation
+        ThucThiSafe: 6. Safe SQL Executor (Query-Only, Opcode Limit)
+        DinhDang: 7. Format 9 Kiểu Output chuẩn BTC
+        SinhSQL --> ThucThiSafe
+        ThucThiSafe --> DinhDang
+    }
+    
+    BaoToanDiem --> [*]: Kết thúc luồng (0đ)
+    DinhDang --> [*]: Kết thúc luồng (+1đ)
+`;
+
+let mermaidRendered = false;
+
+async function renderMermaidDiagram() {
+  if (mermaidRendered || !window.mermaid) return;
+  const chartEl = document.getElementById('mermaidChart');
+  if (!chartEl) return;
+  try {
+    mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+    const { svg } = await mermaid.render('mermaidSvgId', MERMAID_DIAGRAM_DEFINITION);
+    chartEl.innerHTML = svg;
+    mermaidRendered = true;
+  } catch (err) {
+    console.error('Mermaid render error:', err);
+    chartEl.innerHTML = `<div class="text-rose-400 p-4">Lỗi hiển thị Mermaid: ${err.message}</div>`;
+  }
+}
+
+function switchFlowView(view) {
+  const visCont = document.getElementById('viewVisualContainer');
+  const merCont = document.getElementById('viewMermaidContainer');
+  const btnVis = document.getElementById('btnViewVisual');
+  const btnMer = document.getElementById('btnViewMermaid');
+  
+  if (view === 'visual') {
+    if (visCont) visCont.classList.remove('hidden');
+    if (merCont) merCont.classList.add('hidden');
+    if (btnVis) {
+      btnVis.className = 'px-2.5 py-1 rounded-lg bg-blue-600 text-white font-medium shadow transition text-[11px]';
+    }
+    if (btnMer) {
+      btnMer.className = 'px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition text-[11px]';
+    }
+  } else {
+    if (visCont) visCont.classList.add('hidden');
+    if (merCont) merCont.classList.remove('hidden');
+    if (btnMer) {
+      btnMer.className = 'px-2.5 py-1 rounded-lg bg-blue-600 text-white font-medium shadow transition text-[11px]';
+    }
+    if (btnVis) {
+      btnVis.className = 'px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition text-[11px]';
+    }
+    renderMermaidDiagram();
+  }
+}
+
+function updateActivityDiagram(data) {
+  const sub = data.submission;
+  const badge = document.getElementById('flowStatusBadge');
+  
+  // 1. Update NLU Detail
+  const nluDetail = document.getElementById('actNluDetail');
+  if (nluDetail && data.nlp) {
+    nluDetail.innerHTML = `Clean: <span class="text-white font-semibold">"${data.nlp.clean_query}"</span>`;
+  }
+  
+  // 2. Update Temporal Detail
+  const tempDetail = document.getElementById('actTempDetail');
+  if (tempDetail) {
+    if (data.temporal) {
+      tempDetail.innerHTML = `Range: <span class="text-white font-semibold">${data.temporal.start_date || '?'} &rarr; ${data.temporal.end_date || '?'}</span>`;
+    } else {
+      tempDetail.innerHTML = `<span class="text-slate-500">Mặc định (Không có mốc ngày)</span>`;
+    }
+  }
+  
+  // 3. Update Intent Detail
+  const intentDetail = document.getElementById('actIntentDetail');
+  if (intentDetail && data.plan) {
+    intentDetail.innerHTML = `Intent: <span class="text-white font-semibold">${data.plan.intent}</span> | Conf: <span class="text-indigo-400">${(data.plan.confidence * 100).toFixed(0)}%</span>`;
+  }
+  
+  // 4. Update Decision & Branches
+  const brAbstain = document.getElementById('branchAbstain');
+  const brSuccess = document.getElementById('branchSuccess');
+  const decisionNode = document.getElementById('flowNodeDecision');
+  
+  if (sub.type === 'abstain' || sub.type === 'unanswerable') {
+    if (badge) {
+      badge.className = 'px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-mono text-[11px] flex items-center gap-1.5';
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span> PA GUARD: ${sub.type.toUpperCase()} (0đ)`;
+    }
+    if (brAbstain) {
+      brAbstain.classList.add('flow-node-abstain');
+      brAbstain.classList.remove('opacity-40');
+    }
+    if (brSuccess) {
+      brSuccess.classList.remove('flow-node-success');
+      brSuccess.classList.add('opacity-40');
+    }
+    if (decisionNode) {
+      decisionNode.classList.add('flow-node-abstain');
+      decisionNode.classList.remove('flow-node-success');
+    }
+  } else {
+    if (badge) {
+      badge.className = 'px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono text-[11px] flex items-center gap-1.5';
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> EXECUTED: ${sub.type.toUpperCase()} (+1đ)`;
+    }
+    if (brSuccess) {
+      brSuccess.classList.add('flow-node-success');
+      brSuccess.classList.remove('opacity-40');
+    }
+    if (brAbstain) {
+      brAbstain.classList.remove('flow-node-abstain');
+      brAbstain.classList.add('opacity-40');
+    }
+    if (decisionNode) {
+      decisionNode.classList.add('flow-node-success');
+      decisionNode.classList.remove('flow-node-abstain');
+    }
+  }
 }
 
 async function ask() {
@@ -335,6 +564,12 @@ async function ask() {
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Đang xử lý...';
+  }
+
+  const flowBadge = document.getElementById('flowStatusBadge');
+  if (flowBadge) {
+    flowBadge.className = 'px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40 font-mono text-[11px] flex items-center gap-1.5';
+    flowBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping"></span> RUNNING (Đang suy luận...)';
   }
 
   try {
@@ -437,6 +672,9 @@ function renderResult(data) {
   if (sqlEl) {
     sqlEl.textContent = data.plan.sql || '-- Không có câu lệnh SQL (Truy vấn được xử lý đặc biệt hoặc từ chối)';
   }
+
+  // Update Activity Diagram flow
+  updateActivityDiagram(data);
 }
 
 window.onload = init;
