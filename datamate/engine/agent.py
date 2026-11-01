@@ -169,13 +169,19 @@ class DataMateAgent:
                 trace.latency_ms = (time.perf_counter() - start_time) * 1000
                 return SubmissionItem(id=item.id, type=AnswerType.ABSTAIN), trace
 
-            # Penalized Accuracy Safeguard: In business analytics queries (revenue, product quantity, growth),
-            # an answer of 0 almost always indicates unmatched WHERE conditions (date/product/status).
+            # Penalized Accuracy Safeguard: In business analytics queries (revenue, product quantity, growth, counts, debt),
+            # an answer of 0 or empty list almost always indicates unmatched WHERE conditions or missing dimensions.
             # Returning 0 on non-zero reality yields -1 penalty, whereas ABSTAIN yields 0.
-            if formatted_ans == 0 and plan.intent in (
+            if plan.expected_type == AnswerType.LIST and (formatted_ans is None or len(formatted_ans) == 0):
+                trace.status = "ABSTAIN_EMPTY_LIST"
+                trace.latency_ms = (time.perf_counter() - start_time) * 1000
+                return SubmissionItem(id=item.id, type=AnswerType.ABSTAIN), trace
+
+            if formatted_ans in (0, 0.0) and plan.intent in (
                 "revenue", "product_revenue", "quantity", "product_quantity",
                 "which_day", "which_month", "avg_order_revenue", "growth_rate",
-                "ranking_product_revenue", "ranking_product_quantity"
+                "ranking_product_revenue", "ranking_product_quantity",
+                "debt_max"
             ):
                 trace.status = "ABSTAIN_ZERO_SAFEGUARD"
                 trace.latency_ms = (time.perf_counter() - start_time) * 1000

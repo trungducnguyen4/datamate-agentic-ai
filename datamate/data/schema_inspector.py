@@ -53,7 +53,7 @@ class SchemaInspector:
     PRODUCT_KEYWORDS = [
         "san_pham", "sp", "product", "item", "hang_hoa", "mat_hang", "ten_sp", "ma_sp",
         "ten_mon", "mon_an", "mon", "do_uong", "ten_thuoc", "thuoc", "vat_tu", "dich_vu",
-        "noi_dung", "hang", "ghi_tat", "viet_tat"
+        "noi_dung", "hang_hoa", "mat_hang", "ghi_tat", "viet_tat"
     ]
     ORDER_ID_KEYWORDS = [
         "ma_hoa_don", "ma_don", "ma_dh", "order_id", "invoice_id", "so_hoa_don", "so_hd", "ma_giao_dich",
@@ -395,10 +395,17 @@ class SchemaInspector:
             if kw in clean_name:
                 return "status"
 
-        # 13. Product
-        for kw in cls.PRODUCT_KEYWORDS:
-            if kw in clean_name:
-                return "product"
+        # 12b. Channel & Store (not product)
+        if any(kw in clean_name for kw in ["kenh_ban", "kenh", "channel"]):
+            return "channel"
+        if any(kw in clean_name for kw in ["cua_hang", "cuahang", "store", "chi_nhanh"]):
+            return "store"
+
+        # 13. Product (exclude store, channel, order, customer, delivery)
+        if not any(ex in clean_name for ex in ["cua_hang", "kenh", "channel", "don_hang", "khach_hang", "giao_hang", "nhan_vien"]):
+            for kw in cls.PRODUCT_KEYWORDS:
+                if kw in clean_name:
+                    return "product"
 
         # 14. Viết tắt phổ biến (chỉ nhận khi giá trị mẫu phù hợp)
         compact = re.sub(r"[^a-z0-9]", "", clean_name)

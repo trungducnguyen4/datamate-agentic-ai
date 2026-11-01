@@ -444,7 +444,7 @@ class VietnameseNLP:
 
         # Edge checks
         is_zero_value_query = bool(re.search(r"\b(bằng 0|bằng 0 đồng|0 đồng)\b", q))
-        is_negative_value_query = bool(re.search(r"\b(tiền âm|số tiền âm|âm)\b", q))
+        is_negative_value_query = bool(re.search(r"\b(tiền âm|số tiền âm|giá trị âm|âm tiền)\b", q) or (re.search(r"\bâm\b", q) and not re.search(r"\b(âm lịch|am lich)\b", q)))
         is_success_rate_query = bool(re.search(r"\b(thành công)\b", q) and re.search(r"\b(tỷ lệ|phần trăm)\b", q))
         is_canceled_revenue_query = bool(re.search(r"\b(tổng tiền.*bị hủy|tiền bán.*bị hủy|doanh thu.*bị hủy)\b", q))
         is_special_char_query = bool(re.search(r"\b(ký tự đặc biệt)\b", q))

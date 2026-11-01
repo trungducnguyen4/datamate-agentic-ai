@@ -400,32 +400,23 @@ class TemporalResolver:
                     target_month=f"{target_yr:04d}-{m:02d}",
                 )
 
-        # 9. "Hôm nay", "hôm qua", "hôm kia"
-        if any(w in q for w in ["hôm nay", "ngày này", "ngày ni", "hôm ni", "hom ni", "hom nay", "ngay nay", "ngay ni", "hnay", "bữa nay", "bua nay"]):
-            d_str = anchor.strftime("%Y-%m-%d")
-            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
-        if re.search(r"(?<!\d)\s*\b(?:hôm qua|hom qua|ngày hôm qua|ngay hom qua|ngày qua|ngay qua|hqua|bữa qua|bua qua|hqa)\b", q):
-            d_str = (anchor - timedelta(days=1)).strftime("%Y-%m-%d")
-            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
-        if any(w in q for w in ["hôm kia", "hom kia", "hkia"]):
-            d_str = (anchor - timedelta(days=2)).strftime("%Y-%m-%d")
-            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
-
-        # 10. Calendar Week: "Tuần rồi", "tuần trước", "tuần qua"
-        if any(w in q for w in ["tuần rồi", "tuần trước", "tuần qua", "tuan roi", "tuan truoc"]):
-            current_monday = anchor - timedelta(days=anchor.weekday())
-            prev_monday = current_monday - timedelta(days=7)
-            prev_sunday = prev_monday + timedelta(days=6)
+        # 9. Calendar Year: "Năm ngoái", "năm trước", "năm vừa qua", "nam ngoai", "nam truoc"
+        if any(w in q for w in ["năm ngoái", "năm trước", "năm vừa qua", "nam ngoai", "nam truoc"]):
+            prev_year = year - 1
             return DateRange(
-                start_date=prev_monday.strftime("%Y-%m-%d"),
-                end_date=prev_sunday.strftime("%Y-%m-%d"),
+                start_date=f"{prev_year:04d}-01-01",
+                end_date=f"{prev_year:04d}-12-31",
             )
 
-        # "Tuần này", "tuần ni" (Rulebook Rule 31: Từ thứ Hai đến hết hôm nay)
-        if any(w in q for w in ["tuần này", "tuần ni", "tuan nay", "tuan ni"]):
-            current_monday = anchor - timedelta(days=anchor.weekday())
+        # 10. Year-to-date: "Năm nay", "năm ni", "từ đầu năm", "đầu năm tới nay", "đầu năm tới chừ"
+        # Rulebook: "từ đầu năm tới nay" = 01/01 → hết hôm nay (không phải 31/12)
+        if any(w in q for w in [
+            "năm nay", "năm ni", "nam nay", "nam ni",
+            "đầu năm", "dau nam", "từ đầu năm", "tu dau nam",
+            "đầu năm tới nay", "đầu năm đến nay", "đầu năm tới chừ", "đầu năm tới bây chừ"
+        ]):
             return DateRange(
-                start_date=current_monday.strftime("%Y-%m-%d"),
+                start_date=f"{year:04d}-01-01",
                 end_date=anchor.strftime("%Y-%m-%d"),
             )
 
@@ -444,28 +435,42 @@ class TemporalResolver:
                 target_month=f"{prev_year:04d}-{prev_month:02d}",
             )
 
-        # "Tháng này", "tháng ni" (Rulebook Rule 33: Từ ngày 1 đến hết hôm nay)
-        if any(w in q for w in ["tháng này", "tháng ni", "thang nay", "thang ni"]):
+        # Month-to-date: "Tháng này", "tháng ni", "từ đầu tháng" (Rulebook Rule 33: Từ ngày 1 đến hết hôm nay)
+        if any(w in q for w in ["tháng này", "tháng ni", "thang nay", "thang ni", "đầu tháng", "dau thang", "từ đầu tháng", "tu dau thang"]):
             return DateRange(
                 start_date=f"{year:04d}-{month:02d}-01",
                 end_date=anchor.strftime("%Y-%m-%d"),
                 target_month=f"{year:04d}-{month:02d}",
             )
 
-        # 12. Year: "Năm ngoái", "năm trước", "năm nay", "năm ni"
-        if any(w in q for w in ["năm ngoái", "năm trước", "năm vừa qua", "nam ngoai", "nam truoc"]):
-            prev_year = year - 1
+        # 12. Calendar Week: "Tuần rồi", "tuần trước", "tuần qua"
+        if any(w in q for w in ["tuần rồi", "tuần trước", "tuần qua", "tuan roi", "tuan truoc"]):
+            current_monday = anchor - timedelta(days=anchor.weekday())
+            prev_monday = current_monday - timedelta(days=7)
+            prev_sunday = prev_monday + timedelta(days=6)
             return DateRange(
-                start_date=f"{prev_year:04d}-01-01",
-                end_date=f"{prev_year:04d}-12-31",
+                start_date=prev_monday.strftime("%Y-%m-%d"),
+                end_date=prev_sunday.strftime("%Y-%m-%d"),
             )
 
-        if any(w in q for w in ["năm nay", "năm ni", "nam nay", "nam ni"]):
-            # Rulebook: "từ đầu năm tới nay" = 01/01 → hết hôm nay (không phải 31/12)
+        # Week-to-date: "Tuần này", "tuần ni" (Rulebook Rule 31: Từ thứ Hai đến hết hôm nay)
+        if any(w in q for w in ["tuần này", "tuần ni", "tuan nay", "tuan ni", "đầu tuần", "dau tuan", "từ đầu tuần", "tu dau tuan"]):
+            current_monday = anchor - timedelta(days=anchor.weekday())
             return DateRange(
-                start_date=f"{year:04d}-01-01",
+                start_date=current_monday.strftime("%Y-%m-%d"),
                 end_date=anchor.strftime("%Y-%m-%d"),
             )
+
+        # 13. Single day: "Hôm qua", "hôm kia", "hôm nay"
+        if re.search(r"(?<!\d)\s*\b(?:hôm qua|hom qua|ngày hôm qua|ngay hom qua|ngày qua|ngay qua|hqua|bữa qua|bua qua|hqa)\b", q):
+            d_str = (anchor - timedelta(days=1)).strftime("%Y-%m-%d")
+            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
+        if any(w in q for w in ["hôm kia", "hom kia", "hkia"]):
+            d_str = (anchor - timedelta(days=2)).strftime("%Y-%m-%d")
+            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
+        if any(w in q for w in ["hôm nay", "ngày này", "ngày ni", "hôm ni", "hom ni", "hom nay", "ngay nay", "ngay ni", "hnay", "bữa nay", "bua nay"]):
+            d_str = anchor.strftime("%Y-%m-%d")
+            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
 
         return None
 

@@ -444,7 +444,7 @@ class BusinessRuleCompiler:
                 return cls._apply_guards(CompiledQueryPlan(intent="order_count", expected_type=AnswerType.ABSTAIN), nlp_info, clean_q)
             where_str, params = build_where_clause()
             if order_id_col:
-                sql = f"SELECT COUNT(DISTINCT `{order_id_col}`) FROM `{sales_table}` {where_str};"
+                sql = f"SELECT CASE WHEN COUNT(`{order_id_col}`) > 0 THEN COUNT(DISTINCT `{order_id_col}`) ELSE COUNT(*) END FROM `{sales_table}` {where_str};"
             else:
                 sql = f"SELECT COUNT(*) FROM `{sales_table}` {where_str};"
             return cls._apply_guards(CompiledQueryPlan(intent="order_count", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
@@ -829,10 +829,14 @@ class BusinessRuleCompiler:
                 "nhập hàng", "nhap hang", "đánh hàng", "danh hang", "cất hàng", "cat hang", "nhập kho", "nhap kho",
                 "chi nhập", "chi nhap", "tiền hàng nhập", "tien hang nhap", "giá vốn", "gia von", "chi phí", "chi phi",
                 "lãi", "lai", "lợi nhuận", "loi nhuan", "tiền lời", "tien loi",
-                # Payment, credit, installments
+                # Payment, credit, installments, discounts, points
                 "chuyển khoản", "chuyen khoan", "tiền mặt", "tien mat", "quẹt thẻ", "quet the", "thẻ tín dụng", "the tin dung",
                 "ví điện tử", "vi dien tu", "momo", "zalopay", "vnpay", "trả góp", "tra gop", "bán chịu", "ban chiu",
                 "ghi nợ", "ghi no", "chưa góp", "chua gop", "kỳ chưa tới hạn", "sau hôm nay", "sau hom nay",
+                "quá hạn", "qua han", "kỳ góp", "ky gop", "chưa đóng", "chua dong",
+                "voucher", "coupon", "khuyến mãi", "khuyen mai", "mã giảm giá", "ma giam gia", "chiết khấu", "chiet khau",
+                "điểm tích lũy", "diem tich luy", "điểm trừ", "diem tru", "điểm thưởng", "diem thuong",
+                "đăng ký", "dang ky", "thành viên mới", "thanh vien moi",
                 # Shifts & time of day
                 "ca sáng", "ca sang", "ca chiều", "ca chieu", "ca tối", "ca toi", "ca đêm", "ca dem",
                 "buổi sáng", "buoi sang", "buổi trưa", "buoi trua", "buổi chiều", "buoi chieu", "buổi tối", "buoi toi",
@@ -862,13 +866,28 @@ class BusinessRuleCompiler:
             # Specific category mentioned in question but unparsed
             q_clean_h = re.sub(r"\b(cửa hàng|cua hang|đơn hàng|don hang)\b", "", clean_q)
             if not nlp_info.category_filter and not nlp_info.has_specific_product:
-                if re.search(r"\b(nhóm|loại|phân loại|phan loai|ngành hàng|nganh hang)\b", q_clean_h):
+                if re.search(r"\b(nhóm|nhom|loại|loai|phân loại|phan loai|ngành hàng|nganh hang)\b", q_clean_h):
                     return CompiledQueryPlan(intent="unparsed_category_guard_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
                 m = re.search(r"\bbán\s+(.+?)\s+(?:được|duoc)\s+(?:bao nhiêu|mấy|bnhiu|bn)", q_clean_h)
                 if m:
                     middle = m.group(1).strip()
                     if middle and middle not in ("ra", "thì", "thi", "tổng cộng", "tong cong", "tat ca", "tất cả"):
                         return CompiledQueryPlan(intent="unparsed_product_guard_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+
+        # Guard 7: Order count with return/cancel conditions
+        if plan.intent == "order_count":
+            if any(w in clean_q for w in ["trả lại", "tra lai", "đổi trả", "doi tra", "hoàn hàng", "hoan hang", "trả hàng", "tra hang"]):
+                return CompiledQueryPlan(intent="return_order_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+            is_not_canceled = any(w in clean_q for w in ["không bị hủy", "khong bi huy", "chưa bị hủy", "chua bi huy", "không hủy", "khong huy"])
+            if any(w in clean_q for w in ["hủy", "huỷ", "huy"]) and not is_not_canceled:
+                return CompiledQueryPlan(intent="return_order_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+
+        # Guard 8: Product rankings with profit or count questions
+        if plan.intent in ("ranking_product_quantity", "ranking_product_revenue"):
+            if any(w in clean_q for w in ["lời", "loi", "lãi", "lai", "lợi nhuận", "loi nhuan", "lãi gộp", "lai gop"]):
+                return CompiledQueryPlan(intent="ranking_profit_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
+            if re.search(r"\b(có bao nhiêu|co bao nhieu|có mấy|co may|bao nhiêu mặt hàng|bao nhieu mat hang|mấy mặt hàng|may mat hang|bao nhiêu sp|bao nhieu sp|mấy sp|may sp|bao nhiêu món|bao nhieu mon|mấy món|may mon)\b", clean_q):
+                return CompiledQueryPlan(intent="ranking_count_abstain", expected_type=AnswerType.ABSTAIN, confidence=0.0)
 
         return plan
 
