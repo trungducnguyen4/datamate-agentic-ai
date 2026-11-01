@@ -49,7 +49,19 @@
     <div class="lg:col-span-4 flex flex-col gap-5">
       <!-- Business Selector Card -->
       <div class="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
+        <div class="mb-3.5">
+          <label class="text-xs font-semibold uppercase tracking-wider text-slate-400 block mb-1.5 flex items-center gap-1.5">
+            <i class="fa-solid fa-layer-group text-emerald-400"></i> Nguồn Dữ Liệu (Dataset)
+          </label>
+          <select id="datasetSelect" class="w-full bg-slate-900 border border-emerald-500/30 rounded-xl px-3 py-2 text-xs text-emerald-300 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+            <option value="public_test" selected>🔥 Public Test Zalo 2026 (14 doanh nghiệp, 1.000 câu)</option>
+            <option value="train">🏆 Zalo 2026 Train (30 doanh nghiệp, 3.000 câu)</option>
+            <option value="5m">🚀 Siêu Dữ Liệu 5 Triệu Dòng (datamate_vietnamese_qa_5m.csv - 1.2GB)</option>
+            <option value="sample">🧪 Sample Mock Data (4 doanh nghiệp demo)</option>
+          </select>
+        </div>
+
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-2">
           <i class="fa-solid fa-store text-blue-400"></i> Doanh Nghiệp (Business Package)
         </h2>
         <select id="businessSelect" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50">
@@ -90,9 +102,17 @@
 
         <!-- Sample question pills -->
         <div class="mb-3">
-          <span class="text-xs text-slate-400 mr-2">Gợi ý mẫu:</span>
-          <div id="samplePills" class="inline-flex flex-wrap gap-1.5 mt-1.5">
-            <!-- Rendered by JS -->
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-xs text-slate-400 flex items-center gap-1.5">
+              <i class="fa-solid fa-lightbulb text-amber-400 text-[11px]"></i>
+              <span>Gợi ý mẫu (theo doanh nghiệp đang chọn):</span>
+            </span>
+            <button id="refreshSamplesBtn" class="text-[11px] text-blue-400 hover:text-blue-300 transition flex items-center gap-1">
+              <i class="fa-solid fa-arrows-rotate text-[10px]"></i> Đổi câu khác
+            </button>
+          </div>
+          <div id="samplePills" class="flex flex-wrap gap-1.5">
+            <!-- Rendered by JS: 3-4 compact pills -->
           </div>
         </div>
 

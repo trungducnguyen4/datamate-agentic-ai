@@ -298,9 +298,11 @@ class VietnameseNLP:
         ) or is_debt_highest
 
         # Order queries
-        is_order_count_query = bool(
-            re.search(r"\b(bao nhiêu đơn|mấy đơn|số đơn hàng|số đơn|số lượng đơn)\b", q)
-        ) or is_not_canceled
+        is_order_count_query = (
+            bool(
+                re.search(r"\b(bao nhiêu đơn|mấy đơn|số đơn hàng|số đơn|số lượng đơn)\b", q)
+            ) or is_not_canceled
+        ) and not bool(re.search(r"\b(ai|khách nào|người nào|sản phẩm nào|món nào)\b", q))
 
         is_order_max_query = bool(
             re.search(r"\b(đơn hàng nào|đơn nào|đơn).*(giá trị cao nhất|giá trị thanh toán cao nhất|thanh toán cao nhất|nhiều tiền nhất|to tiền nhất|nặng tiền nhất|lớn nhất|giá trị lớn nhất)\b", q)
@@ -334,11 +336,13 @@ class VietnameseNLP:
 
         is_quantity_ranking = bool(
             re.search(r"\b(bán chạy nhất|bán nhiều nhất|tiêu thụ nhiều nhất|tiêu thụ lớn nhất|bán tốt nhất|bán được nhiều nhất|bán dc nhiều nhất|chạy nhất)\b", q)
-            or (re.search(r"\b(số lượng bán|số lượng tiêu thụ)\b", q) and re.search(r"\b(lớn nhất|cao nhất|nhiều nhất)\b", q))
+            or (re.search(r"\b(số lượng bán|số lượng tiêu thụ|số lượng)\b", q) and re.search(r"\b(lớn nhất|cao nhất|nhiều nhất)\b", q))
+            or (re.search(r"\b(mặt hàng|sản phẩm|thuốc|món|hàng|sp)\b", q) and re.search(r"\b(nhiều nhất|chạy nhất|ít nhất|ít người mua|nhiều người mua|ưa chuộng nhất)\b", q) and not is_revenue_ranking)
         ) and not is_revenue_ranking
 
         is_lowest_ranking = bool(
-            re.search(r"\b(bán ế nhất|bán ít nhất|bán chậm nhất|lượng bán thấp nhất|lượng bán nhỏ nhất|tiêu thụ ít nhất|số lượng bán nhỏ nhất)\b", q)
+            re.search(r"\b(bán ế nhất|bán ít nhất|bán chậm nhất|lượng bán thấp nhất|lượng bán nhỏ nhất|tiêu thụ ít nhất|số lượng bán nhỏ nhất|ít người mua|ít khách mua|ít ai mua|ít người mua nhất|ít khách mua nhất|mua ít nhất|người mua ít nhất|khách mua ít nhất|ít được mua nhất)\b", q)
+            or (re.search(r"\b(sản phẩm|mặt hàng|thuốc|món|hàng|sp)\b", q) and re.search(r"\b(ít|kém|thấp|ế)\b", q) and re.search(r"\b(nhất|nhứt|mua|bán)\b", q))
         ) or is_revenue_lowest
 
         # Check "bán được bao nhiêu"
@@ -352,7 +356,7 @@ class VietnameseNLP:
         ) or is_revenue_ranking or is_revenue_lowest
 
         is_quantity_query = bool(
-            re.search(r"\b(số lượng bán|tổng sản lượng|sản lượng|bao nhiêu cái|bao nhiêu ly|bao nhiêu hộp|bao nhiêu vỉ|bao nhiêu món|bao nhiêu sản phẩm)\b", q)
+            re.search(r"\b(tổng số lượng|số lượng bán|tổng sản lượng|sản lượng|bao nhiêu cái|bao nhiêu ly|bao nhiêu hộp|bao nhiêu vỉ|bao nhiêu món|bao nhiêu sản phẩm|số lượng.*bán|bán ra.*số lượng)\b", q)
             or (is_ban_duoc_bao_nhieu and (has_unit_word or not (is_asking_money or bool(re.search(r"\b(bao nhiêu rồi|nhiêu rồi|bn rùi|bn ròi)\b", q)))))
         ) or is_quantity_ranking or (is_lowest_ranking and not is_revenue_lowest)
 
@@ -381,6 +385,18 @@ class VietnameseNLP:
                     break
 
         # Step 5: Clean query by stripping polite fluff and business prefixes
+        is_asking_for_product = bool(
+            re.search(r"\b(sản phẩm|mặt hàng|thuốc|món|hàng|sp|dịch vụ|loại hàng|mặt hàng nào|sản phẩm nào|thuốc nào|món nào|hàng nào|sp nào)\b", q)
+        )
+
+        is_customer_query = (
+            bool(
+                re.search(r"\b(khách nào|khách hàng nào|ai mua|ai là khách|khách sộp|khách chi tiêu|khách quen|khách vip|khách mua nhiều|khách hay đổi ý|top.*khách|khách trung thành|khách.*nhiều đơn|khách.*nhiều tiền)\b", q)
+                or (re.search(r"\b(ai|người nào|khách nào)\b", q) and re.search(r"\b(mua|chi tiêu|đặt đơn|sộp)\b", q))
+            )
+            and not is_asking_for_product
+        )
+
         clean = q
         for pat in cls.FLUFF_PATTERNS:
             clean = re.sub(pat, " ", clean, flags=re.IGNORECASE)
@@ -423,7 +439,7 @@ class VietnameseNLP:
             debt_below=debt_below,
             is_distinct_product_query=is_distinct_product_query,
             is_unsold_query=is_unsold_query,
-            is_customer_query=bool(re.search(r"\b(khách hàng|người mua)\b", q)),
+            is_customer_query=is_customer_query,
             is_customer_loyalty_query=is_customer_loyalty_query,
             is_employee_query=is_employee_query,
             is_cancellation_query=is_cancellation_query,
