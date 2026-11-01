@@ -1,8 +1,9 @@
 # DataMate Offline Docker Submission Image
 # Meets Zalo AI Challenge 2026 specs:
 # - Offline inference (no internet access)
-# - Input mounted at /data
+# - Input mounted at /data (read-only)
 # - Output written to /result/submission.jsonl
+# - Logs written to /result/logs/execution.jsonl
 # - GPU acceleration supported (NVIDIA Blackwell / CUDA >= 12.8 compatible)
 
 FROM python:3.12-slim
@@ -23,11 +24,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
+# Copy source code and entrypoint
 COPY datamate /app/datamate
 COPY scripts /app/scripts
+COPY predict.sh /app/predict.sh
+RUN chmod +x /app/predict.sh
 
-# Create input/output directories
-RUN mkdir -p /data /result
+# Create input/output and cache directories
+RUN mkdir -p /data /result /tmp/datamate_cache
 
-ENTRYPOINT ["python", "-m", "datamate.cli", "--data-dir", "/data", "--questions", "/data/questions.jsonl", "--output", "/result/submission.jsonl"]
+ENTRYPOINT ["/app/predict.sh"]

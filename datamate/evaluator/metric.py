@@ -12,7 +12,7 @@ def match_number(pred: Any, ref: Any) -> bool:
         r_val = float(ref)
         if math.isnan(p_val) or math.isnan(r_val):
             return False
-        return round(p_val, 2) == round(r_val, 2)
+        return abs(round(p_val, 2) - round(r_val, 2)) < 1e-9
     except (ValueError, TypeError):
         return False
 
@@ -24,7 +24,7 @@ def match_percent(pred: Any, ref: Any) -> bool:
         r_val = float(ref)
         if math.isnan(p_val) or math.isnan(r_val):
             return False
-        return round(p_val, 2) == round(r_val, 2)
+        return abs(round(p_val, 2) - round(r_val, 2)) < 1e-9
     except (ValueError, TypeError):
         return False
 
@@ -65,6 +65,69 @@ def match_list(pred: Any, ref: Any) -> bool:
         return False
     for p_elem, r_elem in zip(pred, ref):
         if not match_element(p_elem, r_elem):
+            return False
+    return True
+
+
+def _string_forms(ref: Dict[str, Any]) -> List[str]:
+    """Gom mọi dạng được chấp nhận của một đáp án string.
+
+    BTC dùng khoá ``alias`` trong `answers.jsonl`; một số công cụ nội bộ dùng
+    ``accepted_forms``. Hỗ trợ cả hai.
+    """
+    forms: List[str] = []
+    answer = ref.get("answer")
+    if answer is not None:
+        forms.append(str(answer))
+
+    alias = ref.get("alias")
+    if isinstance(alias, list):
+        for item in alias:
+            if isinstance(item, list):
+                forms.extend(str(x) for x in item)
+            elif item is not None:
+                forms.append(str(item))
+    elif alias:
+        forms.append(str(alias))
+
+    accepted = ref.get("accepted_forms")
+    if isinstance(accepted, list):
+        forms.extend(str(x) for x in accepted)
+    elif accepted:
+        forms.append(str(accepted))
+
+    # bỏ trùng, giữ thứ tự
+    seen = set()
+    unique = []
+    for form in forms:
+        if form not in seen:
+            seen.add(form)
+            unique.append(form)
+    return unique
+
+
+def _element_forms(ref_answer: List[Any], alias: Any, index: int) -> List[Any]:
+    forms: List[Any] = []
+    if index < len(ref_answer):
+        forms.append(ref_answer[index])
+    if isinstance(alias, list) and index < len(alias):
+        item = alias[index]
+        if isinstance(item, list):
+            forms.extend(item)
+        else:
+            forms.append(item)
+    return forms
+
+
+def match_list_with_alias(pred: Any, ref: List[Any], alias: Any) -> bool:
+    """List match có xét ``alias`` cho từng phần tử (BTC: alias là list-of-list)."""
+    if not isinstance(pred, (list, tuple)) or not isinstance(ref, (list, tuple)):
+        return False
+    if len(pred) != len(ref):
+        return False
+    for index, (p_elem, r_elem) in enumerate(zip(pred, ref)):
+        forms = _element_forms(list(ref), alias, index)
+        if not any(match_element(p_elem, form) for form in forms):
             return False
     return True
 
@@ -158,11 +221,10 @@ def evaluate_single_answer(
     ref_type = ref.get("type")
     ref_ans = ref.get("answer")
 
-    # If reference expects abstain (e.g. ambiguous query):
+    # If reference expects abstain: theo đề, abstain luôn được tính là abstain
+    # ("Scored as abstain regardless of the reference"), không phải correct/wrong.
     if ref_type == AnswerType.ABSTAIN.value:
-        if pred_type == AnswerType.ABSTAIN.value:
-            return EvaluationResult.CORRECT
-        return EvaluationResult.WRONG
+        return EvaluationResult.ABSTAIN
 
     # Rule: type abstain or missing answer is an abstain (scores 0, avoids penalty)
     if pred_type == AnswerType.ABSTAIN.value or pred_type is None:
@@ -184,17 +246,17 @@ def evaluate_single_answer(
     elif ref_type == AnswerType.PERCENT.value:
         return EvaluationResult.CORRECT if match_percent(pred_ans, ref_ans) else EvaluationResult.WRONG
     elif ref_type == AnswerType.STRING.value:
-        accepted = ref.get("accepted_forms")
-        if accepted:
-            forms = [ref_ans] + accepted if isinstance(accepted, list) else [ref_ans, accepted]
-        else:
-            forms = ref_ans
+        forms = _string_forms(ref)
+        if not forms:
+            return EvaluationResult.WRONG
         return EvaluationResult.CORRECT if match_string(str(pred_ans), forms) else EvaluationResult.WRONG
     elif ref_type == AnswerType.DATE.value:
         return EvaluationResult.CORRECT if match_date(pred_ans, ref_ans) else EvaluationResult.WRONG
     elif ref_type == AnswerType.BOOLEAN.value:
         return EvaluationResult.CORRECT if match_boolean(pred_ans, ref_ans) else EvaluationResult.WRONG
     elif ref_type == AnswerType.LIST.value:
+        if match_list_with_alias(pred_ans, ref_ans, ref.get("alias")):
+            return EvaluationResult.CORRECT
         return EvaluationResult.CORRECT if match_list(pred_ans, ref_ans) else EvaluationResult.WRONG
     elif ref_type == AnswerType.TABLE.value:
         return EvaluationResult.CORRECT if match_table(pred_ans, ref_ans) else EvaluationResult.WRONG

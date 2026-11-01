@@ -1,6 +1,7 @@
 from __future__ import annotations
 import re
 import sqlite3
+import time
 from typing import Any, List, Optional, Tuple
 
 
@@ -16,7 +17,8 @@ class SafeSQLExecutor:
         sql: str,
         params: Optional[Tuple[Any, ...]] = None,
         max_rows: int = 1000,
-        max_opcodes: int = 500_000,
+        max_opcodes: int = 20_000_000,
+        timeout_seconds: float = 10.0,
     ) -> Tuple[List[str], List[List[Any]]]:
         """Execute a SELECT query and return (columns, rows) safely."""
         clean_sql = sql.strip().rstrip(";")
@@ -38,9 +40,11 @@ class SafeSQLExecutor:
 
         # Progress handler for execution timeout / infinite loop protection
         step_counter = [0]
+        deadline = time.monotonic() + timeout_seconds
+
         def progress_limit():
             step_counter[0] += 1
-            if step_counter[0] > max_opcodes:
+            if step_counter[0] > max_opcodes or time.monotonic() > deadline:
                 return 1  # Aborts execution with sqlite3.OperationalError: interrupted
             return 0
 

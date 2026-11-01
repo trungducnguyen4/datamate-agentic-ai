@@ -615,7 +615,8 @@ function renderResult(data) {
       if (typeof sub.answer === 'number') {
         displayVal = Number(sub.answer).toLocaleString('vi-VN');
         if (sub.type === 'percent') displayVal += ' %';
-        else if (sub.type === 'number' && sub.answer >= 1000) displayVal += ' VNĐ';
+        else if (data.plan && (data.plan.intent === 'order_count' || data.nlp.is_order_count_query)) displayVal += ' đơn hàng';
+        else if (sub.type === 'number' && sub.answer >= 1000 && !data.nlp.is_quantity_query) displayVal += ' VNĐ';
       } else if (Array.isArray(sub.answer)) {
         displayVal = `<ul class="list-disc list-inside text-sm font-medium mt-1">` + sub.answer.map(x => `<li>${x}</li>`).join('') + `</ul>`;
       }

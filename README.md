@@ -62,8 +62,10 @@ zalo/
 │   │   ├── types.py           # 9 kiểu dữ liệu đáp án & schema submission
 │   │   └── normalizer.py      # Chuẩn hóa chuỗi và so khớp theo luật BTC
 │   ├── data/                  # Nạp dữ liệu đa định dạng & tra cứu lịch
-│   │   ├── loader.py          # Load CSV, multi-sheet Excel, SQLite
-│   │   ├── calendar.py        # Solar-Lunar Calendar cho các năm 2024 - 2027
+│   │   ├── loader.py          # Load CSV, multi-sheet Excel, SQLite (cache ra /tmp)
+│   │   ├── calendar.py        # Fallback lịch âm 2024 - 2027
+│   │   ├── calendar_csv.py    # Đọc calendar.csv của BTC (Tết, tháng Giêng, rằm...)
+│   │   ├── union_view.py      # Gộp bảng fact theo tháng + join header/chi tiết
 │   │   └── schema_inspector.py# Phân tích schema và vai trò ngữ nghĩa của cột
 │   ├── temporal/              # Phân giải mốc thời gian tiếng Việt
 │   │   └── resolver.py        # Xử lý các cụm từ chỉ thời gian đối chiếu as_of_date
@@ -75,14 +77,22 @@ zalo/
 │   │   └── metric.py          # So khớp chính xác 9 kiểu đầu ra & tính PA
 │   └── cli.py                 # CLI chạy hàng loạt trên questions.jsonl
 ├── docs/spec/                 # Toàn bộ tài liệu, luật thi & ảnh metric từ BTC
-├── tests/                     # Bộ kiểm thử tự động toàn diện (16/16 passed)
+├── docs/COMPLIANCE_AUDIT.md   # Báo cáo đối chiếu đề bài (2026-11-01)
+├── tests/                     # Bộ kiểm thử tự động toàn diện (56/56 passed)
 │   ├── test_normalizer.py     # Kiểm thử luật chuẩn hóa tiếng Việt
 │   ├── test_evaluator.py      # Kiểm thử luật chấm điểm và PA
-│   ├── test_temporal.py       # Kiểm thử giải mã mốc thời gian
-│   └── test_end_to_end.py     # Kiểm thử tích hợp Agent trên mock dataset
+│   ├── test_temporal.py       # Kiểm thử giải mã mốc thời gian (gồm Tết theo calendar.csv)
+│   ├── test_end_to_end.py     # Kiểm thử tích hợp Agent trên mock dataset
+│   ├── test_p0_p1_fixes.py    # Hồi quy: data root, cache /tmp, union tháng, alias
+│   ├── test_vietnamese_qa_suite.py  # Suite 300 câu tự soạn
+│   ├── test_benchmark_300.py  # Regression trên benchmark nội bộ
+│   └── test_ui.py             # Smoke test FastAPI UI
 ├── .clinerules                # Quy chuẩn Commit & Verification Protocol (ExamTrust)
 ├── Dockerfile                 # Docker submission package chuẩn BTC (offline 100%)
-└── requirements.txt           # Thư viện phụ thuộc
+├── requirements.txt           # Thư viện phụ thuộc cho inference
+├── requirements-ui.txt        # Thêm FastAPI/uvicorn cho Web UI
+├── requirements-benchmark.txt # Thêm DuckDB/tabulate cho benchmark 5M
+└── requirements-all.txt       # Gộp cả 3 file trên (dev/benchmark đầy đủ)
 ```
 
 ---
@@ -91,15 +101,28 @@ zalo/
 
 ### 1. Cài đặt môi trường
 ```bash
+# Chỉ inference (đủ cho Docker image)
 pip install -r requirements.txt
+
+# Môi trường dev đầy đủ (inference + Web UI + benchmark 5M)
+pip install -r requirements-all.txt
 ```
 
-### 2. Chạy toàn bộ Test Suite
+### 2. Khai báo Model (Rule 2 — Zalo AI Challenge 2026)
+Bài giải **không sử dụng bất kỳ model học máy nào** (không LLM, không embedding,
+không reranker, không classifier). Toàn bộ pipeline là engine luật tất định
+(schema inference + temporal resolver + rule compiler + SQLite). Do đó:
+
+- Tổng số tham số sử dụng khi inference: **0** (giới hạn của BTC là 15 tỷ).
+- Không cần GPU, không cần tải trọng số, không phụ thuộc mạng.
+- Không có fine-tuning, không dùng dữ liệu public/private test để train.
+
+### 3. Chạy toàn bộ Test Suite
 ```bash
 python -m pytest tests/ -v
 ```
 
-### 3. Chạy suy luận sinh kết quả nộp bài (`submission.jsonl`)
+### 4. Chạy suy luận sinh kết quả nộp bài (`submission.jsonl`)
 ```bash
 python -m datamate.cli \
   --data-dir data/public_test \
@@ -107,7 +130,7 @@ python -m datamate.cli \
   --output submission.jsonl
 ```
 
-### 4. Đánh giá thử nghiệm với nhãn đối chiếu (nếu có ground truth)
+### 5. Đánh giá thử nghiệm với nhãn đối chiếu (nếu có ground truth)
 ```bash
 python -m datamate.cli \
   --data-dir data/public_test \
@@ -122,8 +145,11 @@ python -m datamate.cli \
 
 Theo quy chế Zalo AI Challenge 2026:
 - Quá trình chạy nghiệm thu chạy offline (`--network none`).
-- Dữ liệu kiểm thử được mount tại `/data`.
-- Kết quả xuất ra `/result/submission.jsonl`.
+- Dữ liệu kiểm thử được mount tại `/data` (read-only). Agent tự dò data root
+  `/data` hoặc `/data/data`, và đọc `calendar.csv` cùng thư mục.
+- Cache SQLite ghi ra `/tmp/datamate_cache` — **không** ghi vào `/data` (Rule 5).
+- Kết quả xuất ra `/result/submission.jsonl`, ghi streaming từng câu (Rule 7/8).
+- Log đối soát xuất ra `/result/submission_log.jsonl` (id, trạng thái, intent, SQL, latency).
 
 ```bash
 # Build image
@@ -135,3 +161,6 @@ docker run --rm --network none \
   -v $(pwd)/result:/result \
   datamate-solution:latest
 ```
+
+> Lưu ý: volume `data/public_test` chứa `questions.jsonl`, `calendar.csv`, `rulebook.md`
+> và thư mục `data/` — đúng layout BTC mount.

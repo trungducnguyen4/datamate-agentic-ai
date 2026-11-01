@@ -21,13 +21,15 @@ def run_pipeline(
     output_file: str,
     eval_ref_file: Optional[str] = None,
     limit: Optional[int] = None,
+    log_file: Optional[str] = None,
 ) -> None:
     if not os.path.exists(questions_file):
         print(f"Error: Questions file not found at {questions_file}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Loading DataMate agent with data directory: {data_dir}")
+    print(f"Loading DataMate agent with data directory: {data_dir}", flush=True)
     agent = DataMateAgent(data_root_dir=data_dir)
+    print(f"Resolved data root: {agent.data_root_dir}", flush=True)
 
     # Read questions
     questions: List[QuestionItem] = []
@@ -42,27 +44,50 @@ def run_pipeline(
     if limit and limit > 0:
         questions = questions[:limit]
 
-    print(f"Processing {len(questions)} questions...")
+    print(f"Processing {len(questions)} questions...", flush=True)
+    os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+    if log_file is None:
+        log_file = os.path.join(
+            os.path.dirname(os.path.abspath(output_file)), "submission_log.jsonl"
+        )
+    os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
+
     start_time = time.time()
     results: List[SubmissionItem] = []
 
-    for i, q in enumerate(questions, start=1):
-        sub_item = agent.answer_question(q)
-        results.append(sub_item)
-        if i % 25 == 0 or i == len(questions):
-            elapsed = time.time() - start_time
-            print(f"[{i}/{len(questions)}] Processed ({elapsed:.1f}s)")
-
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
-
-    # Write submission.jsonl
-    with open(output_file, "w", encoding="utf-8") as out:
-        for item in results:
-            out.write(json.dumps(item.to_dict(), ensure_ascii=False) + "\n")
+    # Ghi streaming: BTC chỉ chấm những dòng đã có trong /result/submission.jsonl
+    # nếu tiến trình bị dừng giữa chừng (Rule 7/8).
+    with open(output_file, "w", encoding="utf-8") as out, open(
+        log_file, "w", encoding="utf-8"
+    ) as log:
+        for i, q in enumerate(questions, start=1):
+            sub_item, trace = agent.answer_question_with_trace(q)
+            results.append(sub_item)
+            out.write(json.dumps(sub_item.to_dict(), ensure_ascii=False) + "\n")
+            out.flush()
+            log.write(
+                json.dumps(
+                    {
+                        "id": trace.id,
+                        "status": trace.status,
+                        "intent": trace.intent,
+                        "sql": trace.sql,
+                        "error_phase": trace.error_phase,
+                        "error_message": trace.error_message,
+                        "latency_ms": round(trace.latency_ms, 3),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            log.flush()
+            if i % 25 == 0 or i == len(questions):
+                elapsed = time.time() - start_time
+                print(f"[{i}/{len(questions)}] Processed ({elapsed:.1f}s)", flush=True)
 
     total_time = time.time() - start_time
-    print(f"Done! Submission saved to {output_file} in {total_time:.2f} seconds.")
+    print(f"Done! Submission saved to {output_file} in {total_time:.2f} seconds.", flush=True)
+    print(f"Run log saved to {log_file}", flush=True)
 
     # Optional evaluation
     if eval_ref_file and os.path.exists(eval_ref_file):
@@ -99,6 +124,7 @@ def main():
     parser.add_argument("--output", default="submission.jsonl", help="Path to write submission.jsonl")
     parser.add_argument("--eval-ref", default=None, help="Optional path to reference jsonl for PA evaluation")
     parser.add_argument("--limit", type=int, default=None, help="Optional question limit")
+    parser.add_argument("--log", default=None, help="Optional path for run log (JSONL)")
 
     args = parser.parse_args()
     run_pipeline(
@@ -107,6 +133,7 @@ def main():
         output_file=args.output,
         eval_ref_file=args.eval_ref,
         limit=args.limit,
+        log_file=args.log,
     )
 
 

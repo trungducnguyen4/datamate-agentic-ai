@@ -31,27 +31,40 @@ LUNAR_KEY_DATES: Dict[Tuple[int, int, int], str] = {
     (2027, 9, 15): "Tết Trung Thu (Rằm tháng Tám)",
 }
 
-# Solar date ranges for Lunar Month 1 (Tháng Giêng âm lịch) and Lunar 1-15 (Mùng 1 đến Rằm)
+# Solar date ranges for Lunar Month 1 (Tháng Giêng âm lịch), Lunar 1-15 (Mùng 1 đến Rằm),
+# and the official Rulebook Tết Window (Rule 35: 23 tháng Chạp đến mùng 10 tháng Giêng)
 LUNAR_RANGES: Dict[int, Dict[str, Tuple[str, str]]] = {
     2024: {
         "thang_gieng": ("2024-02-10", "2024-03-09"),
         "mung_1_den_ram": ("2024-02-10", "2024-02-24"),
-        "tet": ("2024-02-10", "2024-02-10"),
+        "tet_mung_1": ("2024-02-10", "2024-02-10"),
+        # Rule 35: 23 tháng Chạp 2023 -> mùng 10 tháng Giêng 2024
+        "tet_window": ("2024-02-02", "2024-02-19"),
+        "tet": ("2024-02-02", "2024-02-19"),
     },
     2025: {
         "thang_gieng": ("2025-01-29", "2025-02-27"),
         "mung_1_den_ram": ("2025-01-29", "2025-02-12"),
-        "tet": ("2025-01-29", "2025-01-29"),
+        "tet_mung_1": ("2025-01-29", "2025-01-29"),
+        # Rule 35: 23 tháng Chạp 2024 -> mùng 10 tháng Giêng 2025
+        "tet_window": ("2025-01-22", "2025-02-07"),
+        "tet": ("2025-01-22", "2025-02-07"),
     },
     2026: {
         "thang_gieng": ("2026-02-17", "2026-03-18"),
         "mung_1_den_ram": ("2026-02-17", "2026-03-03"),
-        "tet": ("2026-02-17", "2026-02-17"),
+        "tet_mung_1": ("2026-02-17", "2026-02-17"),
+        # Rule 35: 23 tháng Chạp 2025 -> mùng 10 tháng Giêng 2026
+        "tet_window": ("2026-02-10", "2026-02-26"),
+        "tet": ("2026-02-10", "2026-02-26"),
     },
     2027: {
         "thang_gieng": ("2027-02-06", "2027-03-07"),
         "mung_1_den_ram": ("2027-02-06", "2027-02-20"),
-        "tet": ("2027-02-06", "2027-02-06"),
+        "tet_mung_1": ("2027-02-06", "2027-02-06"),
+        # Rule 35: 23 tháng Chạp 2026 -> mùng 10 tháng Giêng 2027
+        "tet_window": ("2027-01-30", "2027-02-16"),
+        "tet": ("2027-01-30", "2027-02-16"),
     },
 }
 

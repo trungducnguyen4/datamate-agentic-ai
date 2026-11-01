@@ -4,37 +4,88 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from datamate.core.types import AnswerType, QuestionItem, SubmissionItem, ExecutionTrace
+from datamate.data.calendar_csv import configure_calendar
 from datamate.data.loader import BusinessDataLoader
 from datamate.data.schema_inspector import SchemaInspector
+from datamate.data.union_view import ensure_sales_union
 from datamate.engine.executor import SafeSQLExecutor
 from datamate.engine.rule_compiler import BusinessRuleCompiler, CompiledQueryPlan
 
 logger = logging.getLogger("datamate.agent")
+
+DATA_SUFFIXES = (".csv", ".xlsx", ".xls", ".sqlite", ".db")
 
 
 class DataMateAgent:
     """Agentic AI engine for DataMate question answering over business data."""
 
     def __init__(self, data_root_dir: str):
-        self.data_root_dir = os.path.abspath(data_root_dir)
+        raw_root = os.path.abspath(data_root_dir)
+        self.split_root_dir = raw_root
+        self.data_root_dir = self._resolve_data_root(raw_root)
+        self._calendar = configure_calendar(raw_root, self.data_root_dir)
         self._loaders_cache: Dict[str, BusinessDataLoader] = {}
         self._tables_cache: Dict[str, Any] = {}
         self.last_trace: Optional[ExecutionTrace] = None
 
+    # ------------------------------------------------------------- data root
+    @staticmethod
+    def _has_data_package(path: str) -> bool:
+        if not os.path.isdir(path):
+            return False
+        try:
+            entries = os.listdir(path)
+        except OSError:
+            return False
+        for name in entries:
+            if name.startswith("."):
+                continue
+            sub = os.path.join(path, name)
+            if not os.path.isdir(sub):
+                continue
+            try:
+                files = os.listdir(sub)
+            except OSError:
+                continue
+            if any(f.lower().endswith(DATA_SUFFIXES) for f in files):
+                return True
+        return False
+
+    @classmethod
+    def _resolve_data_root(cls, raw_root: str) -> str:
+        """Chấp nhận cả `/data` và `/data/data` (layout của BTC)."""
+        candidates = [raw_root, os.path.join(raw_root, "data")]
+        for candidate in candidates:
+            if cls._has_data_package(candidate):
+                return candidate
+        return raw_root
+
+    def _business_dir(self, business_id: str) -> Optional[str]:
+        for root in (self.data_root_dir, self.split_root_dir):
+            candidate = os.path.join(root, business_id)
+            if os.path.isdir(candidate):
+                return candidate
+        return None
+
+    # ----------------------------------------------------------------- data
     def get_or_load_business(self, business_id: str) -> BusinessDataLoader:
         if business_id in self._loaders_cache:
             return self._loaders_cache[business_id]
 
-        biz_dir = os.path.join(self.data_root_dir, business_id)
-        loader = BusinessDataLoader(biz_dir).load()
+        biz_dir = self._business_dir(business_id)
+        loader = BusinessDataLoader(biz_dir or os.path.join(self.data_root_dir, business_id)).load()
         self._loaders_cache[business_id] = loader
         return loader
 
     def get_tables(self, business_id: str, conn) -> Any:
         if business_id not in self._tables_cache:
-            self._tables_cache[business_id] = SchemaInspector.inspect(conn)
+            tables = SchemaInspector.inspect(conn)
+            if tables:
+                ensure_sales_union(conn, tables)
+            self._tables_cache[business_id] = tables
         return self._tables_cache[business_id]
 
+    # ------------------------------------------------------------- question
     def answer_question(self, item: QuestionItem) -> SubmissionItem:
         """Process a single question and return a valid SubmissionItem."""
         submission, trace = self.answer_question_with_trace(item)
@@ -48,6 +99,16 @@ class DataMateAgent:
 
         phase = "LOADER"
         try:
+            business_dir = self._business_dir(item.business_id)
+            if business_dir is None:
+                # Không có gói dữ liệu: đây là lỗi hệ thống, abstain an toàn hơn
+                # unanswerable (tránh bị trừ điểm oan).
+                trace.status = "MISSING_BUSINESS"
+                trace.error_phase = "LOADER"
+                trace.error_message = f"business package not found: {item.business_id}"
+                trace.latency_ms = (time.perf_counter() - start_time) * 1000
+                return SubmissionItem(id=item.id, type=AnswerType.ABSTAIN), trace
+
             loader = self.get_or_load_business(item.business_id)
 
             phase = "SCHEMA"
@@ -55,10 +116,10 @@ class DataMateAgent:
 
             # If no tables exist for this business
             if not tables:
-                trace.status = "UNANSWERABLE"
+                trace.status = "NO_TABLES"
                 trace.error_phase = "SCHEMA"
                 trace.latency_ms = (time.perf_counter() - start_time) * 1000
-                return SubmissionItem(id=item.id, type=AnswerType.UNANSWERABLE), trace
+                return SubmissionItem(id=item.id, type=AnswerType.ABSTAIN), trace
 
             phase = "COMPILER"
             plan: CompiledQueryPlan = BusinessRuleCompiler.compile(
