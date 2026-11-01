@@ -120,20 +120,41 @@ class TemporalResolver:
                 is_exact_day=True,
             )
 
-        # 7. Specific YYYY-MM format in query (e.g., "tháng 3 năm 2026", "tháng 03/2026")
-        month_match = re.search(r"tháng\s*(\d{1,2})(?:[\s/,-]+năm\s*|\/)(\d{4})", q)
+        # 7. Specific YYYY-MM format in query (e.g., "tháng 3 năm 2026", "tháng 03/2026", "thang 4/2025")
+        month_match = re.search(r"(?:tháng|thang)\s*(\d{1,2})(?:[\s/,-]+(?:năm|nam)?\s*|\/)(\d{4})", q)
         if month_match:
             m = int(month_match.group(1))
             y = int(month_match.group(2))
-            last_day = calendar.monthrange(y, m)[1]
+            if 1 <= m <= 12:
+                last_day = calendar.monthrange(y, m)[1]
+                return DateRange(
+                    start_date=f"{y:04d}-{m:02d}-01",
+                    end_date=f"{y:04d}-{m:02d}-{last_day:02d}",
+                    target_month=f"{y:04d}-{m:02d}",
+                )
+
+        # 7b. Quarter: "Quý 1", "quý 2", "quý 3", "quý 4", "quy 4/2025", "quý 4 năm 2025", "quý 4 năm ngoái"
+        quarter_match = re.search(r"(?:quý|quy)\s*([1-4]|i{1,3}|iv)(?:[\s/,-]*(?:năm|nam)?\s*(\d{4}))?", q)
+        if quarter_match:
+            raw_q = quarter_match.group(1).lower()
+            if quarter_match.group(2):
+                target_yr = int(quarter_match.group(2))
+            elif any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
+                target_yr = year - 1
+            else:
+                target_yr = year
+            roman_map = {"1": 1, "i": 1, "2": 2, "ii": 2, "3": 3, "iii": 3, "4": 4, "iv": 4}
+            q_num = roman_map.get(raw_q, 1)
+            start_m = (q_num - 1) * 3 + 1
+            end_m = q_num * 3
+            last_day = calendar.monthrange(target_yr, end_m)[1]
             return DateRange(
-                start_date=f"{y:04d}-{m:02d}-01",
-                end_date=f"{y:04d}-{m:02d}-{last_day:02d}",
-                target_month=f"{y:04d}-{m:02d}",
+                start_date=f"{target_yr:04d}-{start_m:02d}-01",
+                end_date=f"{target_yr:04d}-{end_m:02d}-{last_day:02d}",
             )
 
         # 8. Year-to-date: "năm 2026 đến nay", "năm 2026 đến giờ"
-        ytd_match = re.search(r"năm\s*(\d{4})\s*(?:đến nay|đến giờ|tới nay|tới giờ|den nay|den gio)", q)
+        ytd_match = re.search(r"(?:năm|nam)\s*(\d{4})\s*(?:đến nay|đến giờ|tới nay|tới giờ|den nay|den gio)", q)
         if ytd_match:
             y = int(ytd_match.group(1))
             return DateRange(
@@ -142,8 +163,8 @@ class TemporalResolver:
             )
 
         # Specific YYYY alone: "năm 2025", "năm 2026"
-        year_match = re.search(r"năm\s*(\d{4})", q)
-        if year_match and not any(w in q for w in ["năm ngoái", "năm trước", "năm nay", "năm ni"]):
+        year_match = re.search(r"(?:năm|nam)\s*(\d{4})", q)
+        if year_match and not any(w in q for w in ["năm ngoái", "năm trước", "năm nay", "năm ni", "nam ngoai", "nam truoc", "nam nay", "nam ni"]):
             y = int(year_match.group(1))
             return DateRange(
                 start_date=f"{y:04d}-01-01",
@@ -226,20 +247,6 @@ class TemporalResolver:
             return DateRange(
                 start_date=f"{year:04d}-01-01",
                 end_date=f"{year:04d}-12-31",
-            )
-
-        # 13. Quarter: "Quý 1", "quý 2", "quý 3", "quý 4"
-        quarter_match = re.search(r"quý\s*([1-4]|i{1,3}|iv)", q)
-        if quarter_match:
-            raw_q = quarter_match.group(1)
-            roman_map = {"1": 1, "i": 1, "2": 2, "ii": 2, "3": 3, "iii": 3, "4": 4, "iv": 4}
-            q_num = roman_map.get(raw_q, 1)
-            start_m = (q_num - 1) * 3 + 1
-            end_m = q_num * 3
-            last_day = calendar.monthrange(year, end_m)[1]
-            return DateRange(
-                start_date=f"{year:04d}-{start_m:02d}-01",
-                end_date=f"{year:04d}-{end_m:02d}-{last_day:02d}",
             )
 
         return None

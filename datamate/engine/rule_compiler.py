@@ -599,7 +599,7 @@ class BusinessRuleCompiler:
                     prod_code_col = c.name
                 else:
                     prod_name_col = c.name
-            elif any(k in name_lower for k in ["ma_don", "order_id", "invoice_id", "so_hd"]):
+            elif c.semantic_role == "order_id" or any(k in name_lower for k in ["ma_don", "ma_hd", "ma_hoa_don", "hoa_don", "order_id", "invoice_id", "so_hd", "so_don"]):
                 order_id_col = c.name
             elif any(k in name_lower for k in ["giam_gia", "chiet_khau", "discount"]):
                 discount_col = c.name

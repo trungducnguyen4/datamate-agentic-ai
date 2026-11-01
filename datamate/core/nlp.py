@@ -172,10 +172,27 @@ class VietnameseNLP:
         (r"\bhom qua\b", "hôm qua"),
         (r"\bbao nhieu\b", "bao nhiêu"),
         (r"\btien\b", "tiền"),
+        (r"\bso don hang\b", "số đơn hàng"),
+        (r"\bso don\b", "số đơn"),
+        (r"\btong so don\b", "tổng số đơn"),
+        (r"\bbao nhieu don\b", "bao nhiêu đơn"),
+        (r"\bmay don\b", "mấy đơn"),
+        (r"\bso luong don\b", "số lượng đơn"),
+        (r"\bla bao nhieu\b", "là bao nhiêu"),
+        (r"\bla bao nhiu\b", "là bao nhiêu"),
+        (r"\bquy\s*([1-4]|i{1,3}|iv)\b", r"quý \1"),
+        (r"\bthang\s*(\d{1,2})\b", r"tháng \1"),
+        (r"\bnam\s*(\d{4})\b", r"năm \1"),
     ]
 
     # Conversational polite fluff / honorific patterns to strip for semantic core
     FLUFF_PATTERNS = [
+        r"^\s*[eê]\s+",
+        r"^\s*[eê]\s+này\s+",
+        r"^\s*[eê]\s+bạn\s+",
+        r"^\s*[eê]\s+cho\s+(?:mình|em|tôi)?\s*hỏi\s+",
+        r"^\s*alo\s+",
+        r"^\s*ơi\s+",
         r"^\s*mấy anh chị cho em hỏi\s*",
         r"^\s*anh\s*\/\s*chị xem giúp em\s*",
         r"^\s*anh chị xem giúp em\s*",
@@ -204,6 +221,12 @@ class VietnameseNLP:
         r"\bvậy bác\s*$",
         r"\bvậy nè\s*$",
         r"\bvậy\s*$",
+        r"\bvay\s*$",
+        r"\bvay\s+nha\s*$",
+        r"\bvậy\s+nha\s*$",
+        r"\bvay\s+nhe\s*$",
+        r"\bvậy\s+nhé\s*$",
+        r"\bvay\s+shop\s*$",
         r"\bta\s*$",
     ]
 
@@ -300,9 +323,12 @@ class VietnameseNLP:
         # Order queries
         is_order_count_query = (
             bool(
-                re.search(r"\b(bao nhiêu đơn|mấy đơn|số đơn hàng|số đơn|số lượng đơn)\b", q)
+                re.search(
+                    r"\b(bao nhiêu đơn|bao nhieu don|mấy đơn|may don|số đơn hàng|so don hang|số đơn|so don|số lượng đơn|so luong don|tổng số đơn|tong so don)\b",
+                    q,
+                )
             ) or is_not_canceled
-        ) and not bool(re.search(r"\b(ai|khách nào|người nào|sản phẩm nào|món nào)\b", q))
+        ) and not bool(re.search(r"\b(ai|khách nào|khach nao|người nào|nguoi nao|sản phẩm nào|san pham nao|món nào|mon nao)\b", q))
 
         is_order_max_query = bool(
             re.search(r"\b(đơn hàng nào|đơn nào|đơn).*(giá trị cao nhất|giá trị thanh toán cao nhất|thanh toán cao nhất|nhiều tiền nhất|to tiền nhất|nặng tiền nhất|lớn nhất|giá trị lớn nhất)\b", q)
