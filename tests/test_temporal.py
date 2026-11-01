@@ -18,7 +18,8 @@ def test_resolve_thang_nay():
     res = TemporalResolver.resolve(q, "2026-03-04")
     assert res is not None
     assert res.start_date == "2026-03-01"
-    assert res.end_date == "2026-03-31"
+    # Rulebook Rule 33: "Tháng này" calculates from 1st of month up to as_of_date (today)
+    assert res.end_date == "2026-03-04"
     assert res.target_month == "2026-03"
 
 

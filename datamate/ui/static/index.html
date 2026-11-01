@@ -193,19 +193,60 @@
 
   </main>
 
-  <!-- QA Execution Checklist Modal -->
-  <div id="checklistModal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+  <!-- QA Testing Dashboard Modal -->
+  <div id="checklistModal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+      <!-- Modal Header -->
       <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
         <div>
           <h3 class="font-bold text-white text-base flex items-center gap-2">
-            <i class="fa-solid fa-list-check text-purple-400"></i> QA Execution Checklist — 15 Priority Cases
+            <i class="fa-solid fa-vial-circle-check text-purple-400"></i> DataMate QA Testing Dashboard
+            <span class="text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full font-normal">Automated Verification</span>
           </h3>
-          <p class="text-xs text-slate-400 mt-0.5">Bấm vào bất kỳ test case nào để nạp dữ liệu và kiểm thử trực tiếp</p>
+          <p class="text-xs text-slate-400 mt-0.5">Kiểm thử tự động 15 Priority Test Cases: So sánh Ground Truth, phát hiện lỗi NLU/SQL và tính điểm Penalized Accuracy</p>
         </div>
-        <button id="closeChecklistBtn" class="text-slate-400 hover:text-white text-lg"><i class="fa-solid fa-xmark"></i></button>
+        <div class="flex items-center gap-3">
+          <button id="runAllTestsBtn" class="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-purple-900/30 transition">
+            <i class="fa-solid fa-play"></i> Run All 15 Tests
+          </button>
+          <button id="closeChecklistBtn" class="text-slate-400 hover:text-white text-lg"><i class="fa-solid fa-xmark"></i></button>
+        </div>
       </div>
-      <div class="p-6 overflow-auto flex-1 space-y-2.5" id="checklistContainer">
+
+      <!-- Scorecard Header -->
+      <div class="grid grid-cols-4 gap-4 px-6 py-3.5 bg-slate-900/80 border-b border-slate-800 text-xs">
+        <div class="bg-slate-950/60 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+          <div>
+            <div class="text-slate-400">Pass Rate</div>
+            <div id="qaScoreAccuracy" class="text-lg font-bold text-emerald-400">--</div>
+          </div>
+          <i class="fa-solid fa-circle-check text-emerald-500/40 text-2xl"></i>
+        </div>
+        <div class="bg-slate-950/60 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+          <div>
+            <div class="text-slate-400">Penalized Score</div>
+            <div id="qaScorePenalized" class="text-lg font-bold text-purple-400">--</div>
+          </div>
+          <i class="fa-solid fa-award text-purple-500/40 text-2xl"></i>
+        </div>
+        <div class="bg-slate-950/60 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+          <div>
+            <div class="text-slate-400">Passed / Failed</div>
+            <div id="qaScoreCounts" class="text-lg font-bold text-slate-200">0 / 0</div>
+          </div>
+          <i class="fa-solid fa-chart-pie text-blue-500/40 text-2xl"></i>
+        </div>
+        <div class="bg-slate-950/60 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+          <div>
+            <div class="text-slate-400">Avg Latency</div>
+            <div id="qaScoreLatency" class="text-lg font-bold text-amber-400">--</div>
+          </div>
+          <i class="fa-solid fa-bolt text-amber-500/40 text-2xl"></i>
+        </div>
+      </div>
+
+      <!-- Test Cases List Container -->
+      <div class="p-6 overflow-auto flex-1 space-y-3" id="checklistContainer">
         <!-- Rendered by JS -->
       </div>
     </div>

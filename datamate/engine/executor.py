@@ -16,8 +16,9 @@ class SafeSQLExecutor:
         sql: str,
         params: Optional[Tuple[Any, ...]] = None,
         max_rows: int = 1000,
+        max_opcodes: int = 500_000,
     ) -> Tuple[List[str], List[List[Any]]]:
-        """Execute a SELECT query and return (columns, rows)."""
+        """Execute a SELECT query and return (columns, rows) safely."""
         clean_sql = sql.strip().rstrip(";")
         first_word = clean_sql.split()[0].lower() if clean_sql else ""
 
@@ -29,12 +30,29 @@ class SafeSQLExecutor:
             if re.search(rf"\b{kw}\b", clean_sql, re.IGNORECASE):
                 raise ValueError(f"Dangerous keyword detected: {kw}")
 
-        cursor = conn.cursor()
-        cursor.execute(clean_sql, params or ())
-        
-        cols = [desc[0] for desc in cursor.description] if cursor.description else []
-        rows = cursor.fetchmany(max_rows)
-        # Convert tuples to lists
-        rows_list = [list(r) for r in rows]
+        # Enforce read-only at database level
+        try:
+            conn.execute("PRAGMA query_only = ON;")
+        except Exception:
+            pass
 
-        return cols, rows_list
+        # Progress handler for execution timeout / infinite loop protection
+        step_counter = [0]
+        def progress_limit():
+            step_counter[0] += 1
+            if step_counter[0] > max_opcodes:
+                return 1  # Aborts execution with sqlite3.OperationalError: interrupted
+            return 0
+
+        conn.set_progress_handler(progress_limit, 1000)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(clean_sql, params or ())
+            
+            cols = [desc[0] for desc in cursor.description] if cursor.description else []
+            rows = cursor.fetchmany(max_rows)
+            # Convert tuples to lists
+            rows_list = [list(r) for r in rows]
+            return cols, rows_list
+        finally:
+            conn.set_progress_handler(None, 0)

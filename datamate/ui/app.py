@@ -207,7 +207,116 @@ def ask_question(req: AskRequest):
             "confidence": plan.confidence,
             "unanswerable_reason": plan.unanswerable_reason,
         },
+        "trace": agent_inst.last_trace.model_dump() if agent_inst.last_trace else None,
         "latency_ms": latency_ms,
+    }
+
+
+PRIORITY_QA_CASES = [
+    {"id": "VN-02", "biz": "biz_099", "q": "Tháng này mặt hàng nào bán chạy nhất?", "desc": "Câu tự nhiên, chuẩn (Số lượng)", "date": "2026-03-04", "expected_type": "string", "expected_answer": "Panadol Extra đỏ vỉ"},
+    {"id": "VN-03", "biz": "biz_099", "q": "Anh/chị xem giúp em tháng này thuốc nào bán chạy nhất với.", "desc": "Xưng hô và lịch sự", "date": "2026-03-04", "expected_type": "string", "expected_answer": "Panadol Extra đỏ vỉ"},
+    {"id": "CHAT-01", "biz": "biz_099", "q": "sp bán dc nhiều nhất tuần rồi là gì", "desc": "Viết tắt, benchmark", "date": "2026-03-04", "expected_type": "string", "expected_answer": "Panadol Extra đỏ vỉ"},
+    {"id": "CHAT-06", "biz": "biz_099", "q": "thang nay mat hang nao ban chay nhat", "desc": "Tiếng Việt không dấu", "date": "2026-03-04", "expected_type": "string", "expected_answer": "Panadol Extra đỏ vỉ"},
+    {"id": "CHAT-07", "biz": "biz_099", "q": "sp nào bán dc nhìu nhất tuần rùi z shop", "desc": "Teencode, tiếng lóng", "date": "2026-03-04", "expected_type": "string", "expected_answer": "Panadol Extra đỏ vỉ"},
+    {"id": "DIA-04", "biz": "biz_099", "q": "Bữa giờ thuốc nào bán chạy nhất vậy?", "desc": "Phương ngữ Nam, thời gian mơ hồ -> ABSTAIN", "date": "2026-03-04", "expected_type": "abstain", "expected_answer": None},
+    {"id": "DIA-06", "biz": "biz_099", "q": "Tháng ni thuốc mô bán chạy nhất rứa?", "desc": "Phương ngữ Trung", "date": "2026-03-04", "expected_type": "string", "expected_answer": "Panadol Extra đỏ vỉ"},
+    {"id": "SEM-01", "biz": "biz_fixture_probe", "q": "Sản phẩm nào bán được nhiều nhất?", "desc": "Số lượng (Sản phẩm A)", "date": "2026-03-04", "expected_type": "string", "expected_answer": "Sản phẩm A"},
+    {"id": "SEM-02", "biz": "biz_fixture_probe", "q": "Sản phẩm nào thu về nhiều tiền nhất?", "desc": "Doanh thu (Sản phẩm B)", "date": "2026-03-04", "expected_type": "string", "expected_answer": "Sản phẩm B"},
+    {"id": "SEM-03", "biz": "biz_fixture_probe", "q": "Sản phẩm nào có lợi nhuận cao nhất?", "desc": "Cần giá vốn -> UNANSWERABLE", "date": "2026-03-04", "expected_type": "unanswerable", "expected_answer": None},
+    {"id": "SEM-04", "biz": "biz_099", "q": "Panadol đỏ còn hạn sử dụng đến khi nào?", "desc": "Cần HSD -> UNANSWERABLE", "date": "2026-03-04", "expected_type": "unanswerable", "expected_answer": None},
+    {"id": "NEG-04", "biz": "biz_099", "q": "Tại sao tuần rồi doanh số giảm?", "desc": "Câu hỏi Why/Nguyên nhân -> UNANSWERABLE", "date": "2026-03-04", "expected_type": "unanswerable", "expected_answer": None},
+    {"id": "NEG-05", "biz": "biz_099", "q": "Tháng sau dự đoán bán được bao nhiêu cái nhiệt kế?", "desc": "Dự đoán tương lai -> UNANSWERABLE", "date": "2026-03-04", "expected_type": "unanswerable", "expected_answer": None},
+    {"id": "LUNAR-01", "biz": "biz_099", "q": "Từ sau Tết đến giờ bán được bao nhiêu tiền?", "desc": "Lịch âm (Sau Tết Bính Ngọ)", "date": "2026-03-04", "expected_type": "number", "expected_answer": 6425000},
+    {"id": "EMPTY-01", "biz": "biz_empty_sales", "q": "Mặt hàng nào bán chạy nhất tháng này?", "desc": "Tiệm mới mở 0 đơn -> ABSTAIN", "date": "2026-03-04", "expected_type": "abstain", "expected_answer": None},
+]
+
+qa_env_dir = None
+
+
+def get_qa_agent() -> DataMateAgent:
+    global qa_env_dir
+    if not qa_env_dir or not os.path.exists(qa_env_dir):
+        from scripts.run_benchmark_eval import setup_benchmark_env
+        qa_env_dir = setup_benchmark_env()
+    return DataMateAgent(data_root_dir=qa_env_dir)
+
+
+@app.get("/api/qa-checklist")
+def get_qa_checklist():
+    """Return the 15 priority evaluation cases with ground truth references."""
+    return PRIORITY_QA_CASES
+
+
+@app.post("/api/run-all-tests")
+def run_all_qa_tests():
+    """Execute all 15 QA Priority Cases automatically and return scorecard with diffs."""
+    from datamate.evaluator.metric import evaluate_single_answer
+    from datamate.core.types import EvaluationResult
+
+    agent_inst = get_qa_agent()
+    results = []
+    correct_count = 0
+    abstain_count = 0
+    wrong_count = 0
+    total_score = 0.0
+    total_latency = 0.0
+
+    for item in PRIORITY_QA_CASES:
+        t0 = time.perf_counter()
+        q_item = QuestionItem(
+            id=item["id"],
+            business_id=item["biz"],
+            question=item["q"],
+            as_of_date=item["date"],
+        )
+        sub_item, trace = agent_inst.answer_question_with_trace(q_item)
+        latency = round((time.perf_counter() - t0) * 1000, 2)
+        total_latency += latency
+
+        ref = {
+            "id": item["id"],
+            "type": item["expected_type"],
+            "answer": item["expected_answer"],
+        }
+        eval_res = evaluate_single_answer(sub_item, ref)
+        if eval_res == EvaluationResult.CORRECT:
+            status = "PASS"
+            correct_count += 1
+            total_score += 1.0
+        elif eval_res == EvaluationResult.ABSTAIN:
+            status = "ABSTAIN"
+            abstain_count += 1
+        else:
+            status = "FAIL"
+            wrong_count += 1
+            total_score -= 1.0
+
+        results.append({
+            "id": item["id"],
+            "biz": item["biz"],
+            "q": item["q"],
+            "desc": item["desc"],
+            "expected_type": item["expected_type"],
+            "expected_answer": item["expected_answer"],
+            "actual_type": sub_item.type.value if hasattr(sub_item.type, "value") else str(sub_item.type),
+            "actual_answer": sub_item.answer,
+            "status": status,
+            "latency_ms": latency,
+            "trace": trace.model_dump() if trace else None,
+        })
+
+    n = len(PRIORITY_QA_CASES)
+    return {
+        "summary": {
+            "total": n,
+            "passed": correct_count,
+            "abstain": abstain_count,
+            "failed": wrong_count,
+            "penalized_score": round(total_score, 1),
+            "accuracy_pct": round((correct_count / n) * 100, 1),
+            "avg_latency_ms": round(total_latency / n, 2),
+        },
+        "results": results,
     }
 
 

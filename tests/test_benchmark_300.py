@@ -22,6 +22,7 @@ import pytest
 
 from datamate.core.types import AnswerType, QuestionItem
 from datamate.engine.agent import DataMateAgent
+from datamate.evaluator.metric import compute_penalized_accuracy, evaluate_single_answer
 
 
 @pytest.fixture(scope="module")
@@ -94,6 +95,18 @@ def benchmark_env():
     }
     pd.DataFrame(so_no_data).to_csv(os.path.join(biz_099, "so_no.csv"), index=False, encoding="utf-8")
 
+    san_pham_data = {
+        "ma_sp": ["SP01", "SP02", "SP03", "SP04"],
+        "ten_san_pham": [
+            "Panadol Extra đỏ vỉ",
+            "Berberin hộp",
+            "Khẩu trang 4 lớp",
+            "Máy đo huyết áp Omron",
+        ],
+        "don_gia": [15000, 15000, 25000, 1200000],
+    }
+    pd.DataFrame(san_pham_data).to_csv(os.path.join(biz_099, "san_pham.csv"), index=False, encoding="utf-8")
+
     # 3. biz_empty_sales
     biz_empty = os.path.join(temp_dir, "biz_empty_sales")
     os.makedirs(biz_empty, exist_ok=True)
@@ -114,14 +127,12 @@ def benchmark_data():
 
 
 def test_benchmark_penalized_accuracy(benchmark_env, benchmark_data):
-    """Evaluate all 350 questions in the benchmark and assert Penalized Accuracy >= 90% with 0 penalties."""
+    """Evaluate all 350 questions in the benchmark using the unified compute_penalized_accuracy metric."""
     agent = DataMateAgent(data_root_dir=benchmark_env)
 
     total = len(benchmark_data)
-    correct_count = 0
-    abstain_count = 0
-    incorrect_count = 0
-    total_score = 0.0
+    predictions = []
+    references = []
 
     cluster_answers = defaultdict(list)
     metamorphic_results = defaultdict(dict)
@@ -138,8 +149,13 @@ def test_benchmark_penalized_accuracy(benchmark_env, benchmark_data):
         act_type = resp.type.value if hasattr(resp.type, "value") else str(resp.type)
         act_ans = resp.answer
 
-        exp_type = item["expected_type"]
-        exp_ans = item["expected_answer"]
+        predictions.append(resp)
+        references.append({
+            "id": item["id"],
+            "type": item["expected_type"],
+            "answer": item["expected_answer"],
+            "accepted_forms": item.get("accepted_forms"),
+        })
 
         # Track clusters and metamorphic tests
         if item.get("paraphrase_cluster_id"):
@@ -148,56 +164,14 @@ def test_benchmark_penalized_accuracy(benchmark_env, benchmark_data):
         if item.get("metamorphic_rule"):
             metamorphic_results[item["metamorphic_rule"]][item["id"]] = (act_type, act_ans)
 
-        # Scoring
-        score = 0.0
-        if exp_type in ["unanswerable", "abstain"]:
-            if act_type in ["unanswerable", "abstain"]:
-                score = 1.0
-            else:
-                score = -1.0
-        else:
-            if act_type in ["unanswerable", "abstain"]:
-                score = 0.0
-            elif act_type == exp_type:
-                if exp_type == "number":
-                    if abs(float(act_ans) - float(exp_ans)) < 1e-4:
-                        score = 1.0
-                    else:
-                        score = -1.0
-                elif exp_type == "string":
-                    if str(act_ans).strip().lower() == str(exp_ans).strip().lower():
-                        score = 1.0
-                    else:
-                        score = -1.0
-                elif exp_type == "list":
-                    if set(map(str, act_ans or [])) == set(map(str, exp_ans or [])):
-                        score = 1.0
-                    else:
-                        score = -1.0
-                elif exp_type == "percent":
-                    if abs(float(act_ans) - float(exp_ans)) < 1e-2:
-                        score = 1.0
-                    else:
-                        score = -1.0
-                elif exp_type == "boolean":
-                    if bool(act_ans) == bool(exp_ans):
-                        score = 1.0
-                    else:
-                        score = -1.0
-            else:
-                score = -1.0
-
-        if score > 0:
-            correct_count += 1
-        elif score == 0:
-            abstain_count += 1
-        else:
-            incorrect_count += 1
-
-        total_score += score
+    # Unified Contest Metric Evaluation
+    eval_summary = compute_penalized_accuracy(predictions, references)
+    correct_count = eval_summary["correct"]
+    abstain_count = eval_summary["abstain"]
+    incorrect_count = eval_summary["wrong"]
+    penalized_acc = eval_summary["pa"]
 
     # Assertions
-    penalized_acc = total_score / total
     assert incorrect_count == 0, f"Expected 0 incorrect answers, found {incorrect_count}"
     assert penalized_acc >= 0.90, f"Penalized accuracy {penalized_acc*100:.1f}% is below 90% threshold"
     assert correct_count >= 320, f"Expected at least 320 correct answers, got {correct_count}"

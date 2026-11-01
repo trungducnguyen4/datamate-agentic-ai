@@ -6,9 +6,9 @@ import tempfile
 import shutil
 import pandas as pd
 from collections import defaultdict
-from datamate.core.types import QuestionItem, AnswerType
+from datamate.core.types import QuestionItem, AnswerType, EvaluationResult
 from datamate.engine.agent import DataMateAgent
-from datamate.evaluator.metric import evaluate_single_answer
+from datamate.evaluator.metric import evaluate_single_answer, compute_penalized_accuracy
 
 def setup_benchmark_env():
     temp_dir = tempfile.mkdtemp()
@@ -78,6 +78,18 @@ def setup_benchmark_env():
     }
     pd.DataFrame(so_no_data).to_csv(os.path.join(biz_099, "so_no.csv"), index=False, encoding="utf-8")
 
+    san_pham_data = {
+        "ma_sp": ["SP01", "SP02", "SP03", "SP04"],
+        "ten_san_pham": [
+            "Panadol Extra đỏ vỉ",
+            "Berberin hộp",
+            "Khẩu trang 4 lớp",
+            "Máy đo huyết áp Omron",
+        ],
+        "don_gia": [15000, 15000, 25000, 1200000],
+    }
+    pd.DataFrame(san_pham_data).to_csv(os.path.join(biz_099, "san_pham.csv"), index=False, encoding="utf-8")
+
     # 3. biz_empty_sales
     biz_empty = os.path.join(temp_dir, "biz_empty_sales")
     os.makedirs(biz_empty, exist_ok=True)
@@ -121,57 +133,22 @@ def run_benchmark():
         exp_type = item["expected_type"]
         exp_ans = item["expected_answer"]
 
-        # Evaluate score
-        # Competition evaluation logic:
-        # Correct answer = +1
-        # Abstain / Unanswerable correctly = +1
-        # Unanswerable/Abstain when expected number/string = 0 (conservative abstain)
-        # Incorrect answer (confidently wrong number/string) = -1
-        score = 0
-        is_correct = False
-
-        if exp_type in ["unanswerable", "abstain"]:
-            if actual_type in ["unanswerable", "abstain"]:
-                score = 1.0
-                is_correct = True
-            else:
-                score = -1.0 # Confidently gave an answer when impossible
-        else:
-            if actual_type in ["unanswerable", "abstain"]:
-                score = 0.0 # Safe abstain/unanswerable on answerable question
-            elif actual_type == exp_type:
-                if exp_type == "number":
-                    try:
-                        if abs(float(actual_ans) - float(exp_ans)) < 1e-4:
-                            score = 1.0
-                            is_correct = True
-                        else:
-                            score = -1.0
-                    except Exception:
-                        score = -1.0
-                elif exp_type == "string":
-                    if str(actual_ans).strip().lower() == str(exp_ans).strip().lower():
-                        score = 1.0
-                        is_correct = True
-                    else:
-                        score = -1.0
-                elif exp_type == "list":
-                    if isinstance(actual_ans, list) and isinstance(exp_ans, list):
-                        if set(map(str, actual_ans)) == set(map(str, exp_ans)):
-                            score = 1.0
-                            is_correct = True
-                        else:
-                            score = -1.0
-                    else:
-                        score = -1.0
-            else:
-                score = -1.0
-
-        if score > 0:
+        # Evaluate score using unified evaluate_single_answer
+        ref = {
+            "id": item["id"],
+            "type": exp_type,
+            "answer": exp_ans,
+            "accepted_forms": item.get("accepted_forms"),
+        }
+        eval_res = evaluate_single_answer(resp, ref)
+        if eval_res == EvaluationResult.CORRECT:
+            score = 1.0
             category_stats[cat]["correct"] += 1
-        elif score == 0:
+        elif eval_res == EvaluationResult.ABSTAIN:
+            score = 0.0
             category_stats[cat]["abstain"] += 1
         else:
+            score = -1.0
             category_stats[cat]["incorrect"] += 1
             mismatches.append({
                 "id": item["id"],
