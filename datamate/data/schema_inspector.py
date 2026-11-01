@@ -280,42 +280,6 @@ class SchemaInspector:
                             )
                         )
 
-        # Automatic Unified View Creation for Star Schemas / Lookups
-        if "_sales_unified" not in tables:
-            sales_tbl_name = next((t_name for t_name, t_info in tables.items() if t_info.table_kind == "fact_sales" and t_name != "_sales_unified"), None)
-            dim_tbl_name = next((t_name for t_name, t_info in tables.items() if t_info.table_kind == "dim_product" and t_name != "_sales_unified"), None)
-            if sales_tbl_name and dim_tbl_name:
-                s_cols = [c.name for c in tables[sales_tbl_name].columns]
-                d_cols = [c.name for c in tables[dim_tbl_name].columns]
-                s_prod = next((c for c in s_cols if any(k in c.lower() for k in ["hang", "sp", "product", "san_pham", "ma_hang", "ma_sp"])), None)
-                d_code = next((c for c in d_cols if any(k in c.lower() for k in ["ghi_tat", "viet_tat", "ma", "code", "id"])), None)
-                d_name = next((c for c in d_cols if any(k in c.lower() for k in ["ten", "name", "hang"])), None)
-                d_cat = next((c for c in d_cols if any(k in c.lower() for k in ["loai", "nhom", "cat"])), None)
-
-                join_cond = None
-                if s_prod and d_code and d_name and d_code != d_name:
-                    join_cond = f"(s.`{s_prod}` = d.`{d_code}` OR s.`{s_prod}` = d.`{d_name}`)"
-                elif s_prod and d_code:
-                    join_cond = f"s.`{s_prod}` = d.`{d_code}`"
-                elif s_prod and d_name:
-                    join_cond = f"s.`{s_prod}` = d.`{d_name}`"
-
-                if join_cond:
-                    cat_select = f"d.`{d_cat}` AS loai_san_pham," if d_cat else ""
-                    name_select = f"COALESCE(d.`{d_name}`, s.`{s_prod}`) AS ten_san_pham_chuan," if d_name and s_prod else ""
-                    view_sql = f"""
-                    CREATE VIEW IF NOT EXISTS _sales_unified AS
-                    SELECT s.*, {cat_select} {name_select} d.*
-                    FROM `{sales_tbl_name}` s
-                    LEFT JOIN `{dim_tbl_name}` d ON {join_cond};
-                    """
-                    try:
-                        cursor.execute(view_sql)
-                        # Re-inspect to register _sales_unified
-                        return cls.inspect(conn)
-                    except Exception:
-                        pass
-
         return tables
 
     @staticmethod

@@ -416,7 +416,7 @@ class BusinessRuleCompiler:
         # 11b. Intent: Average per order queries (BM_AGG_01, BM_AGG_05)
         if nlp_info.is_avg_order_revenue_query:
             if not sales_table or not amount_expr:
-                return CompiledQueryPlan(intent="avg_order_revenue", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="avg_order_revenue", expected_type=AnswerType.ABSTAIN)
             where_str, params = build_where_clause()
             order_div = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
             sql = f"SELECT ROUND(SUM({amount_expr}) * 1.0 / NULLIF({order_div}, 0), 2) FROM `{sales_table}` {where_str};"
@@ -424,7 +424,7 @@ class BusinessRuleCompiler:
 
         if nlp_info.is_avg_order_qty_query:
             if not sales_table or not qty_col:
-                return CompiledQueryPlan(intent="avg_order_qty", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="avg_order_qty", expected_type=AnswerType.ABSTAIN)
             where_str, params = build_where_clause()
             order_div = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
             sql = f"SELECT ROUND(SUM(`{qty_col}`) * 1.0 / NULLIF({order_div}, 0), 2) FROM `{sales_table}` {where_str};"
@@ -433,7 +433,7 @@ class BusinessRuleCompiler:
         # 12. Intent: Distinct products count (BM_MULTI_20)
         if nlp_info.is_distinct_product_query:
             if not sales_table or not prod_name_col:
-                return CompiledQueryPlan(intent="distinct_products", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="distinct_products", expected_type=AnswerType.ABSTAIN)
             where_str, params = build_where_clause()
             sql = f"SELECT COUNT(DISTINCT `{prod_name_col}`) FROM `{sales_table}` {where_str};"
             return CompiledQueryPlan(intent="distinct_products", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params))
@@ -441,7 +441,7 @@ class BusinessRuleCompiler:
         # 13. Intent: Order count (SEM-10: Tháng này bán được bao nhiêu đơn?)
         if nlp_info.is_order_count_query:
             if not sales_table:
-                return CompiledQueryPlan(intent="order_count", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="order_count", expected_type=AnswerType.ABSTAIN)
             where_str, params = build_where_clause()
             if order_id_col:
                 sql = f"SELECT COUNT(DISTINCT `{order_id_col}`) FROM `{sales_table}` {where_str};"
@@ -520,7 +520,7 @@ class BusinessRuleCompiler:
         # 15. Intent: Specific Product Quantity / Revenue query
         if nlp_info.has_specific_product and not nlp_info.is_revenue_ranking and not nlp_info.is_quantity_ranking:
             if not sales_table:
-                return CompiledQueryPlan(intent="product_metric", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="product_metric", expected_type=AnswerType.ABSTAIN)
             where_str, params = build_where_clause()
             if nlp_info.is_revenue_query:
                 sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` {where_str};"
@@ -533,7 +533,7 @@ class BusinessRuleCompiler:
         # 16a. Intent: Which Day Query (AnswerType.DATE)
         if nlp_info.is_which_day_query or any(w in clean_q for w in ["ngày đắt khách", "ngay dat khach", "ngày đông khách", "ngay dong khach"]):
             if not sales_table or not date_col:
-                return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.ABSTAIN)
             where_str, params = build_where_clause()
             if any(w in clean_q for w in ["đắt khách", "dat khach", "đông khách", "dong khach", "nhiều đơn nhất"]):
                 metric = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
@@ -552,7 +552,7 @@ class BusinessRuleCompiler:
         # 16b. Intent: Which Month Query (AnswerType.DATE)
         if nlp_info.is_which_month_query:
             if not sales_table or not date_col:
-                return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.ABSTAIN)
             metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
             clauses = []
             params = []
@@ -584,7 +584,7 @@ class BusinessRuleCompiler:
         # 16c. Intent: Product Ranking by REVENUE (SEM-02 / SEM-08 / BM_FORMAL_01)
         if nlp_info.is_revenue_ranking or (nlp_info.is_revenue_query and nlp_info.is_lowest_ranking):
             if not sales_table or not prod_name_col or not amount_expr:
-                return CompiledQueryPlan(intent="ranking_product_revenue", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="ranking_product_revenue", expected_type=AnswerType.ABSTAIN)
 
             where_str, params = build_where_clause()
             order_dir = "ASC" if nlp_info.is_lowest_ranking else "DESC"
@@ -612,7 +612,7 @@ class BusinessRuleCompiler:
         # 17. Intent: Product Ranking by QUANTITY SOLD (SEM-01 / SEM-06 / VN-01 / VN-02)
         if nlp_info.is_quantity_ranking or nlp_info.is_lowest_ranking:
             if not sales_table or not prod_name_col:
-                return CompiledQueryPlan(intent="ranking_product_quantity", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="ranking_product_quantity", expected_type=AnswerType.ABSTAIN)
 
             where_str, params = build_where_clause()
             order_dir = "ASC" if nlp_info.is_lowest_ranking else "DESC"
@@ -727,7 +727,7 @@ class BusinessRuleCompiler:
         # 18. Intent: Total Revenue
         if nlp_info.is_revenue_query:
             if not sales_table or not amount_expr:
-                return CompiledQueryPlan(intent="revenue", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="revenue", expected_type=AnswerType.ABSTAIN)
 
             where_str, params = build_where_clause()
             sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` {where_str};"
@@ -736,7 +736,7 @@ class BusinessRuleCompiler:
         # 19. Intent: Total Quantity Sold
         if nlp_info.is_quantity_query or any(w in clean_q for w in ["bán được bao nhiêu", "số lượng bán", "tiêu thụ được bao nhiêu"]):
             if not sales_table:
-                return CompiledQueryPlan(intent="quantity", expected_type=AnswerType.UNANSWERABLE)
+                return CompiledQueryPlan(intent="quantity", expected_type=AnswerType.ABSTAIN)
 
             where_str, params = build_where_clause()
             target_expr = f"`{qty_col}`" if qty_col else amount_expr
