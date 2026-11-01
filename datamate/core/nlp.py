@@ -51,6 +51,14 @@ class NormalizedQueryInfo:
     has_specific_product: Optional[str] = None
     has_specific_order: Optional[str] = None
     has_specific_customer: Optional[str] = None
+    top_k: Optional[int] = None
+    is_which_day_query: bool = False
+    is_which_month_query: bool = False
+    is_consecutive_growth_query: bool = False
+    is_cancellation_rate_query: bool = False
+    is_table_query: bool = False
+    category_filter: Optional[str] = None
+    metric_target: Optional[str] = None
 
 
 class VietnameseNLP:
@@ -372,8 +380,8 @@ class VietnameseNLP:
         ) or is_revenue_lowest
 
         # Check "bán được bao nhiêu"
-        has_unit_word = bool(re.search(r"\b(cái|hộp|vỉ|ly|chai|bịch|gói|sản phẩm|sp|món|chiếc)\b", q))
-        is_ban_duoc_bao_nhieu = bool(re.search(r"\b(bán được bao nhiêu|bán được nhiêu|bán dc bn|bán dc bao nhiêu)\b", q))
+        has_unit_word = bool(re.search(r"\b(cái|hộp|vỉ|ly|chai|bịch|gói|sản phẩm|sp|món|chiếc|máy|đơn|lon|bộ|đôi|cuộn|thùng|cây)\b", q))
+        is_ban_duoc_bao_nhieu = bool(re.search(r"\b(bán được bao nhiêu|bán được nhiêu|bán dc bn|bán dc bao nhiêu|bán ra bao nhiêu|bán ra dc bao nhiêu|bán ra bnhiu)\b", q))
         is_asking_money = bool(re.search(r"\b(tiền|doanh thu|doanh số|thu được)\b", q))
 
         is_revenue_query = bool(
@@ -382,9 +390,32 @@ class VietnameseNLP:
         ) or is_revenue_ranking or is_revenue_lowest
 
         is_quantity_query = bool(
-            re.search(r"\b(tổng số lượng|số lượng bán|tổng sản lượng|sản lượng|bao nhiêu cái|bao nhiêu ly|bao nhiêu hộp|bao nhiêu vỉ|bao nhiêu món|bao nhiêu sản phẩm|số lượng.*bán|bán ra.*số lượng)\b", q)
-            or (is_ban_duoc_bao_nhieu and (has_unit_word or not (is_asking_money or bool(re.search(r"\b(bao nhiêu rồi|nhiêu rồi|bn rùi|bn ròi)\b", q)))))
+            re.search(r"\b(tổng số lượng|số lượng bán|tổng sản lượng|sản lượng|bao nhiêu cái|bao nhiêu ly|bao nhiêu hộp|bao nhiêu vỉ|bao nhiêu món|bao nhiêu sản phẩm|bao nhiêu chiếc|bao nhiêu máy|số lượng.*bán|bán ra.*số lượng)\b", q)
+            or re.search(r"\b(có\s+)?(bao nhiêu|mấy)\s+(?:máy|máy mới|máy cũ|chiếc|cái|ly|hộp|vỉ|món|sản phẩm|đơn|chai|lon|bịch|gói|bộ|đôi|cuộn|thùng|cây)\b", q)
+            or re.search(r"\b(?:bán|báng|tiêu thụ)\s+(?:ra\s+|được\s+|đượt\s+)?(?:bao nhiêu|bnhiu|mấy)\s*(?:máy|máy mới|máy cũ|chiếc|cái|ly|hộp|vỉ|món|sản phẩm|chai|lon|bịch|gói|bộ|đôi|cuộn|thùng|cây)?\b", q)
+            or (is_ban_duoc_bao_nhieu and (has_unit_word or not (is_asking_money or bool(re.search(r"\b(bao nhiêu rồi|nhiêu rồi|bn rùi|bn rồi)\b", q)))))
         ) or is_quantity_ranking or (is_lowest_ranking and not is_revenue_lowest)
+
+        # Category and custom metric filters
+        category_filter = None
+        if re.search(r"\b(nhóm máy mới|máy mới|may moi|nhom may moi)\b", q):
+            category_filter = "máy mới"
+        elif re.search(r"\b(nhóm máy cũ|máy cũ|may cu|nhom may cu|điện thoại cũ|dien thoai cu)\b", q):
+            category_filter = "máy cũ"
+        elif re.search(r"\b(nhóm phụ kiện|phụ kiện|phu kien|nhom phu kien)\b", q):
+            category_filter = "phụ kiện"
+        elif re.search(r"\b(điện thoại|chiếc điện thoại|mấy máy.*không kể phụ kiện|cả máy mới.*máy cũ|gộp cả máy mới)\b", q):
+            category_filter = "máy"
+        elif re.search(r"\b(thuốc kê đơn|thuoc ke don)\b", q):
+            category_filter = "thuốc kê đơn"
+
+        metric_target = None
+        if re.search(r"\b(thu máy cũ|thu may cu|máy cũ trừ vào|may cu tru vao)\b", q):
+            metric_target = "thu_may_cu"
+        elif re.search(r"\b(khách phải trả|khach phai tra|khách trả|khach tra|khách phãi trả)\b", q):
+            metric_target = "khach_tra"
+        elif re.search(r"\b(tiền bớt|tiền giảm|bớt được|chiết khấu)\b", q):
+            metric_target = "bot"
 
         # Edge checks
         is_zero_value_query = bool(re.search(r"\b(bằng 0|bằng 0 đồng|0 đồng)\b", q))
@@ -395,10 +426,49 @@ class VietnameseNLP:
 
         # Extract specific entities if mentioned
         has_specific_product = None
-        for p_kw in ["panadol", "berberin", "khẩu trang", "máy đo huyết áp", "sp_a", "sp_b", "sp_c"]:
+        for p_kw in [
+            "panadol", "berberin", "khẩu trang", "máy đo huyết áp", "sp_a", "sp_b", "sp_c",
+            "xiaomi redmi note 14", "xiaomi redmi 14c", "redmi note 14", "redmi note 12",
+            "samsung galaxy a56", "galaxy a56", "iphone 16 pro max", "iphone 15", "iphone 11",
+            "cốc sạc nhanh 20w", "kệ điện thoại", "thẻ nhớ microsd", "thẻ nhớ 64g",
+            "tiger lon", "tiger", "heineken", "xi măng hà tiên", "xi măng insee",
+            "costar omega 3", "gạch ống", "cà phê sữa", "trà đào cam sả", "cà phê đen"
+        ]:
             if p_kw in q:
                 has_specific_product = p_kw
                 break
+
+        # Date & Month selection queries (AnswerType.DATE)
+        is_which_day_query = bool(re.search(r"\b(ngày nào|ngay nao|hạn dùng ngày nào|hạn sử dụng ngày nào|vào ngày nào)\b", q))
+        is_which_month_query = bool(re.search(r"\b(tháng nào|thang nao|vào tháng nào|trong tháng nào)\b", q)) and not is_which_day_query
+
+        # Consecutive Growth boolean query (e.g. Doanh thu 3 tháng có tăng liên tục không?)
+        is_consecutive_growth_query = bool(
+            re.search(r"\b(tăng liên tục|tang lien tuc|luôn cao hơn tháng trước|luon cao hon thang truoc|tháng sau.*cao hơn tháng trước|thang sau.*cao hon thang truoc)\b", q)
+        ) and bool(re.search(r"\b(không|khong|ko|k|nhỉ|hả|\?)\b", q))
+
+        # Cancellation rate percent query (Rule 18: Tỉ lệ đơn huỷ trong kỳ)
+        is_cancellation_rate_query = bool(
+            re.search(r"\b(tỉ lệ.*huỷ|ti le.*huy|tỉ lệ.*hủy|ti le.*huy|phần trăm.*huỷ|phan tram.*huy|bao nhiêu %.*đơn.*hủy|bao nhieu %.*don.*huy|bn %.*đơn.*hủy|% đơn bị huỷ|% don bi huy)\b", q)
+        )
+
+        # Table query (e.g. Bảng khách nợ kèm số tiền còn nợ)
+        is_table_query = bool(re.search(r"\b(bảng|kèm số tiền|kèm số nợ|mỗi người còn nợ bao nhiêu|mỗi người.*nợ bao nhiêu|mỗi người.*bao nhiêu)\b", q))
+
+        if is_quantity_ranking or is_revenue_ranking or is_lowest_ranking or is_which_day_query or is_which_month_query:
+            has_specific_product = None
+        elif not has_specific_product:
+            # Check for products in quotes
+            quote_m = re.search(r"['\"]([^'\"]{3,40})['\"]", raw)
+            if quote_m:
+                has_specific_product = quote_m.group(1).strip()
+            else:
+                # Check for explicit brand & model patterns (e.g. iPhone 16, Samsung A56, Xiaomi Note 14)
+                brand_m = re.search(r"\b(iPhone\s+[\w\s\-\+]+|Samsung\s+[\w\s\-\+]+|Xiaomi\s+[\w\s\-\+]+|Redmi\s+[\w\s\-\+]+|OPPO\s+[\w\s\-\+]+|vivo\s+[\w\s\-\+]+|Tiger\s+[\w\s]+|Heineken\s+[\w\s]+|Xi măng\s+[\w\s\-]+)\b", raw, re.IGNORECASE)
+                if brand_m:
+                    cand = brand_m.group(1).strip()
+                    if len(cand) >= 4 and not any(k in cand.lower() for k in ["bao nhieu", "bnhiu", "duoc", "khong"]):
+                        has_specific_product = cand
 
         order_match = re.search(r"\b(hd\d+|dh\d+|ord\d+)\b", q)
         has_specific_order = order_match.group(1).upper() if order_match else None
@@ -424,6 +494,15 @@ class VietnameseNLP:
             )
             and not is_asking_for_product
         )
+
+        # Extract top_k if specified (e.g. top 3, 5 mặt hàng, top 5 khách hàng)
+        top_k = None
+        k_match = re.search(r"(?<![\/\-\d])(?:top\s*(\d+)|(\d+)\s+(?:mặt hàng|sản phẩm|sp|hàng|khách|món|khách hàng|nhân viên))\b", q)
+        if k_match:
+            k_val = int(k_match.group(1) or k_match.group(2))
+            if 1 < k_val <= 20 and k_val not in (24, 25, 26, 27):
+                top_k = k_val
+
 
         clean = q
         for pat in cls.FLUFF_PATTERNS:
@@ -480,4 +559,12 @@ class VietnameseNLP:
             has_specific_product=has_specific_product,
             has_specific_order=has_specific_order,
             has_specific_customer=has_specific_customer,
+            top_k=top_k,
+            is_which_day_query=is_which_day_query,
+            is_which_month_query=is_which_month_query,
+            is_consecutive_growth_query=is_consecutive_growth_query,
+            is_cancellation_rate_query=is_cancellation_rate_query,
+            is_table_query=is_table_query,
+            category_filter=category_filter,
+            metric_target=metric_target,
         )

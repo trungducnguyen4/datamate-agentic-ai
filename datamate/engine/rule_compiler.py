@@ -193,6 +193,16 @@ class BusinessRuleCompiler:
 
         debt_table, debt_cust_col, debt_amount_col = cls._find_debt_columns(tables)
 
+        # Không thể áp mốc thời gian khi bảng bán hàng không có cột ngày:
+        # thà abstain (0 điểm) còn hơn trả số liệu all-time (-1 điểm).
+        if time_range and not date_col:
+            return CompiledQueryPlan(
+                intent="abstain_no_date_column",
+                expected_type=AnswerType.ABSTAIN,
+                confidence=0.0,
+                unanswerable_reason="Time-bounded question but the sales table has no date column.",
+            )
+
         # If table is completely empty (0 rows) and query asks for ranking:
         if sales_table and tables[sales_table].row_count == 0:
             if nlp_info.is_quantity_ranking or nlp_info.is_revenue_ranking:
@@ -202,12 +212,34 @@ class BusinessRuleCompiler:
         def build_where_clause(include_status: bool = True, custom_prod: Optional[str] = None) -> str:
             clauses = []
             if include_status and status_col:
-                clauses.append(f"`{status_col}` NOT LIKE '%hủy%' AND `{status_col}` NOT LIKE '%cancel%'")
+                clauses.append(
+                    f"(`{status_col}` IS NULL OR ("
+                    f"`{status_col}` NOT LIKE '%hủy%' AND `{status_col}` NOT LIKE '%huỷ%' AND `{status_col}` NOT LIKE '%cancel%' "
+                    f"AND `{status_col}` NOT LIKE '%trả hàng%' AND `{status_col}` NOT LIKE '%đổi trả%' "
+                    f"AND `{status_col}` NOT LIKE '%hoàn trả%' AND `{status_col}` NOT LIKE '%hoàn tiền%' "
+                    f"AND `{status_col}` NOT LIKE '%trả lại%' AND `{status_col}` NOT LIKE '%return%' "
+                    f"AND LOWER(`{status_col}`) != 'trả' AND LOWER(`{status_col}`) != 'tra'))"
+                )
             if time_range and date_col:
                 if time_range.is_exact_day:
-                    clauses.append(f"`{date_col}` = '{time_range.start_date}'")
+                    clauses.append(f"DATE(`{date_col}`) = '{time_range.start_date}'")
                 else:
-                    clauses.append(f"`{date_col}` >= '{time_range.start_date}' AND `{date_col}` <= '{time_range.end_date}'")
+                    clauses.append(f"DATE(`{date_col}`) >= '{time_range.start_date}' AND DATE(`{date_col}`) <= '{time_range.end_date}'")
+            if prod_name_col:
+                clauses.append(f"LOWER(`{prod_name_col}`) NOT LIKE '%phí phục vụ%'")
+
+            if sales_table and nlp_info.category_filter:
+                cat_col = next((c.name for c in tables[sales_table].columns if c.semantic_role == "category" or any(k in c.name.lower() for k in ["loai", "nhom", "cat"])), None)
+                if nlp_info.category_filter == "máy":
+                    if cat_col:
+                        clauses.append(f"(LOWER(`{cat_col}`) LIKE '%máy mới%' OR LOWER(`{cat_col}`) LIKE '%máy cũ%' OR LOWER(`{cat_col}`) LIKE '%may moi%' OR LOWER(`{cat_col}`) LIKE '%may cu%')")
+                    elif prod_name_col:
+                        clauses.append(f"LOWER(`{prod_name_col}`) NOT LIKE '%phụ kiện%' AND LOWER(`{prod_name_col}`) NOT LIKE '%phu kien%'")
+                elif cat_col:
+                    clauses.append(f"LOWER(`{cat_col}`) LIKE '%{nlp_info.category_filter.lower()}%'")
+                elif prod_name_col:
+                    clauses.append(f"LOWER(`{prod_name_col}`) LIKE '%{nlp_info.category_filter.lower()}%'")
+
             if custom_prod:
                 if prod_code_col and "sp_" in custom_prod.lower():
                     clauses.append(f"LOWER(`{prod_code_col}`) = '{custom_prod.lower()}'")
@@ -466,17 +498,19 @@ class BusinessRuleCompiler:
             group_expr = f"`{prod_name_col}`, `{prod_code_col}`" if prod_code_col else f"`{prod_name_col}`"
             tie_breaker = f", `{prod_code_col}` ASC" if prod_code_col else f", `{prod_name_col}` ASC"
 
+            k = nlp_info.top_k or 1
+            exp_type = AnswerType.LIST if k > 1 else AnswerType.STRING
             sql = f"""
             SELECT `{prod_name_col}`
             FROM `{sales_table}`
             {where_str}
             GROUP BY {group_expr}
             ORDER BY SUM({amount_expr}) {order_dir} {tie_breaker}
-            LIMIT 1;
+            LIMIT {k};
             """
             return CompiledQueryPlan(
                 intent="ranking_product_revenue",
-                expected_type=AnswerType.STRING,
+                expected_type=exp_type,
                 sql=sql.strip(),
                 confidence=0.96,
             )
@@ -500,20 +534,91 @@ class BusinessRuleCompiler:
             tie_breaker = f"{secondary_sort}, `{prod_code_col}` ASC" if prod_code_col else f"{secondary_sort}, `{prod_name_col}` ASC"
             group_expr = f"`{prod_name_col}`, `{prod_code_col}`" if prod_code_col else f"`{prod_name_col}`"
 
+            k = nlp_info.top_k or 1
+            exp_type = AnswerType.LIST if k > 1 else AnswerType.STRING
             sql = f"""
             SELECT `{prod_name_col}`
             FROM `{sales_table}`
             {where_str}
             GROUP BY {group_expr}
             ORDER BY {sum_target} {order_dir} {tie_breaker}
-            LIMIT 1;
+            LIMIT {k};
             """
             return CompiledQueryPlan(
                 intent="ranking_product_quantity",
-                expected_type=AnswerType.STRING,
+                expected_type=exp_type,
                 sql=sql.strip(),
                 confidence=0.96,
             )
+
+        # 17b. Intent: Which Day Query (AnswerType.DATE)
+        if nlp_info.is_which_day_query:
+            if not sales_table or not date_col:
+                return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.UNANSWERABLE)
+            metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
+            where_str = build_where_clause()
+            sql = f"""
+            SELECT DATE(`{date_col}`)
+            FROM `{sales_table}`
+            {where_str}
+            GROUP BY DATE(`{date_col}`)
+            ORDER BY SUM({metric}) DESC, DATE(`{date_col}`) ASC
+            LIMIT 1;
+            """
+            return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.DATE, sql=sql.strip(), confidence=0.96)
+
+        # 17c. Intent: Which Month Query (AnswerType.DATE)
+        if nlp_info.is_which_month_query:
+            if not sales_table or not date_col:
+                return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.UNANSWERABLE)
+            metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
+            where_str = build_where_clause()
+            sql = f"""
+            SELECT SUBSTR(DATE(`{date_col}`), 1, 7)
+            FROM `{sales_table}`
+            {where_str}
+            GROUP BY SUBSTR(DATE(`{date_col}`), 1, 7)
+            ORDER BY SUM({metric}) DESC, SUBSTR(DATE(`{date_col}`), 1, 7) ASC
+            LIMIT 1;
+            """
+            return CompiledQueryPlan(intent="which_month", expected_type=AnswerType.DATE, sql=sql.strip(), confidence=0.96)
+
+        # 17d. Intent: Cancellation Rate (Rule 18: AnswerType.PERCENT)
+        if nlp_info.is_cancellation_rate_query:
+            if not sales_table or not status_col:
+                return CompiledQueryPlan(intent="cancellation_rate", expected_type=AnswerType.UNANSWERABLE)
+            where_str = build_where_clause(include_status=False)
+            id_expr = f"`{order_id_col}`" if order_id_col else "*"
+            sql = f"""
+            SELECT ROUND(
+                100.0 * COUNT(DISTINCT CASE WHEN LOWER(`{status_col}`) LIKE '%hủy%' OR LOWER(`{status_col}`) LIKE '%cancel%' OR LOWER(`{status_col}`) LIKE '%trả%' OR LOWER(`{status_col}`) LIKE '%tra%' THEN {id_expr} END)
+                / NULLIF(COUNT(DISTINCT {id_expr}), 0),
+                2
+            )
+            FROM `{sales_table}`
+            {where_str};
+            """
+            return CompiledQueryPlan(intent="cancellation_rate", expected_type=AnswerType.PERCENT, sql=sql.strip(), confidence=0.95)
+
+        # 17e. Intent: Specific Column Target (e.g. thu_may_cu, khach_tra, bot)
+        if nlp_info.metric_target and sales_table:
+            matched_col = next((c.name for c in tables[sales_table].columns if nlp_info.metric_target in c.name.lower()), None)
+            if matched_col:
+                where_str = build_where_clause()
+                sql = f"SELECT ROUND(COALESCE(SUM(`{matched_col}`), 0), 2) FROM `{sales_table}` {where_str};"
+                return CompiledQueryPlan(intent=f"metric_{nlp_info.metric_target}", expected_type=AnswerType.NUMBER, sql=sql.strip(), confidence=0.96)
+
+        # 17f. Intent: Debt Table (AnswerType.TABLE)
+        if nlp_info.is_table_query and debt_table and debt_cust_col and debt_amount_col:
+            k = nlp_info.top_k or 5
+            sql = f"""
+            SELECT `{debt_cust_col}` AS khach_hang, ROUND(`{debt_amount_col}`) AS so_tien_no
+            FROM `{debt_table}`
+            WHERE `{debt_amount_col}` > 0
+            ORDER BY `{debt_amount_col}` DESC
+            LIMIT {k};
+            """
+            return CompiledQueryPlan(intent="debt_table", expected_type=AnswerType.TABLE, sql=sql.strip(), confidence=0.95)
 
         # 18. Intent: Total Revenue
         if nlp_info.is_revenue_query:
@@ -556,11 +661,24 @@ class BusinessRuleCompiler:
         Optional[str],
     ]:
         sales_table = None
-        for t_name, t_info in tables.items():
-            lower = t_name.lower()
-            if any(k in lower for k in ["hoa_don", "don_hang", "ban_hang", "sales", "orders", "giao_dich"]):
-                sales_table = t_name
-                break
+        if "_sales_unified" in tables:
+            sales_table = "_sales_unified"
+        else:
+            best_score = -1
+            for t_name, t_info in tables.items():
+                lower = t_name.lower()
+                if not any(k in lower for k in ["hoa_don", "don_hang", "ban_hang", "sales", "orders", "giao_dich"]):
+                    continue
+                roles = {c.semantic_role for c in t_info.columns if c.semantic_role}
+                score = (
+                    8 * ("date" in roles)
+                    + 4 * ("total_amount" in roles)
+                    + 2 * ("product" in roles)
+                    + 1 * ("quantity" in roles)
+                )
+                if score > best_score:
+                    best_score = score
+                    sales_table = t_name
         if not sales_table and tables:
             sales_table = max(tables.keys(), key=lambda k: tables[k].row_count)
 

@@ -53,14 +53,45 @@ class SchemaInspector:
     PRODUCT_KEYWORDS = [
         "san_pham", "sp", "product", "item", "hang_hoa", "mat_hang", "ten_sp", "ma_sp",
         "ten_mon", "mon_an", "mon", "do_uong", "ten_thuoc", "thuoc", "vat_tu", "dich_vu",
-        "noi_dung", "hang"
+        "noi_dung", "hang", "ghi_tat", "viet_tat"
     ]
-    ORDER_ID_KEYWORDS = ["ma_hoa_don", "ma_don", "ma_dh", "order_id", "invoice_id", "so_hoa_don", "so_hd", "ma_giao_dich"]
+    ORDER_ID_KEYWORDS = [
+        "ma_hoa_don", "ma_don", "ma_dh", "order_id", "invoice_id", "so_hoa_don", "so_hd", "ma_giao_dich",
+        "stt", "so_tt", "so_thu_tu"
+    ]
     COST_KEYWORDS = ["gia_von", "cost", "chi_phi", "von", "loi_nhuan", "lai", "gia_nhap"]
     EXPIRY_KEYWORDS = ["han_su_dung", "hsd", "exp_date", "expiry", "ngay_het_han", "han_dung"]
     STOCK_KEYWORDS = ["ton_kho", "stock", "so_luong_ton", "hang_ton", "sl_ton", "tonkho"]
     EMPLOYEE_KEYWORDS = ["nhan_vien", "staff", "seller", "nguoi_ban", "nv"]
     DEBT_DUE_KEYWORDS = ["han_tra", "ngay_den_han", "ngay_no", "ngay_vay", "due_date", "han_thanh_toan"]
+    CATEGORY_KEYWORDS = ["loai", "loai_hang", "nhom", "nhom_hang", "nganh_hang", "category", "phan_loai"]
+    ADJUSTMENT_KEYWORDS = {
+        "khach_tra": "customer_payment",
+        "khach_phai_tra": "customer_payment",
+        "tien_khach_tra": "customer_payment",
+        "thu_may_cu": "trade_in_amount",
+        "thu_cu": "trade_in_amount",
+        "bot": "discount_amount",
+        "giam_gia": "discount_amount",
+        "chiet_khau": "discount_amount",
+    }
+
+    # Viết tắt rất phổ biến trong bảng tính Việt Nam (tt = thành tiền, dg = đơn giá ...).
+    SHORT_ROLE_NAMES = {
+        "tt": "total_amount",
+        "ttien": "total_amount",
+        "thanhtien": "total_amount",
+        "dg": "unit_price",
+        "dongia": "unit_price",
+        "gianiemyet": "unit_price",
+        "hd": "order_id",
+        "mahd": "order_id",
+        "sohd": "order_id",
+        "sl": "quantity",
+        "soluong": "quantity",
+        "nv": "employee",
+        "manv": "employee",
+    }
 
     @classmethod
     def inspect(cls, conn: sqlite3.Connection) -> Dict[str, TableInfo]:
@@ -139,7 +170,7 @@ class SchemaInspector:
             elif "debt" in roles_in_table or any(k in tbl_clean for k in ["so_no", "cong_no", "debt"]):
                 table_kind = "fact_debt"
                 grain = "customer_debt_balance"
-            elif ("product" in roles_in_table and ("unit_price" in roles_in_table or "stock" in roles_in_table or "cost" in roles_in_table)) or any(k in tbl_clean for k in ["san_pham", "hang_hoa", "danh_muc", "catalog"]):
+            elif "category" in roles_in_table or ("product" in roles_in_table and not ("total_amount" in roles_in_table or "date" in roles_in_table)) or any(k in tbl_clean for k in ["san_pham", "hang_hoa", "danh_muc", "catalog", "ghi_tat", "viet_tat"]):
                 table_kind = "dim_product"
                 grain = "product_catalog"
             elif "customer" in roles_in_table and not ("total_amount" in roles_in_table or "date" in roles_in_table):
@@ -249,11 +280,72 @@ class SchemaInspector:
                             )
                         )
 
+        # Automatic Unified View Creation for Star Schemas / Lookups
+        if "_sales_unified" not in tables:
+            sales_tbl_name = next((t_name for t_name, t_info in tables.items() if t_info.table_kind == "fact_sales" and t_name != "_sales_unified"), None)
+            dim_tbl_name = next((t_name for t_name, t_info in tables.items() if t_info.table_kind == "dim_product" and t_name != "_sales_unified"), None)
+            if sales_tbl_name and dim_tbl_name:
+                s_cols = [c.name for c in tables[sales_tbl_name].columns]
+                d_cols = [c.name for c in tables[dim_tbl_name].columns]
+                s_prod = next((c for c in s_cols if any(k in c.lower() for k in ["hang", "sp", "product", "san_pham", "ma_hang", "ma_sp"])), None)
+                d_code = next((c for c in d_cols if any(k in c.lower() for k in ["ghi_tat", "viet_tat", "ma", "code", "id"])), None)
+                d_name = next((c for c in d_cols if any(k in c.lower() for k in ["ten", "name", "hang"])), None)
+                d_cat = next((c for c in d_cols if any(k in c.lower() for k in ["loai", "nhom", "cat"])), None)
+
+                join_cond = None
+                if s_prod and d_code and d_name and d_code != d_name:
+                    join_cond = f"(s.`{s_prod}` = d.`{d_code}` OR s.`{s_prod}` = d.`{d_name}`)"
+                elif s_prod and d_code:
+                    join_cond = f"s.`{s_prod}` = d.`{d_code}`"
+                elif s_prod and d_name:
+                    join_cond = f"s.`{s_prod}` = d.`{d_name}`"
+
+                if join_cond:
+                    cat_select = f"d.`{d_cat}` AS loai_san_pham," if d_cat else ""
+                    name_select = f"COALESCE(d.`{d_name}`, s.`{s_prod}`) AS ten_san_pham_chuan," if d_name and s_prod else ""
+                    view_sql = f"""
+                    CREATE VIEW IF NOT EXISTS _sales_unified AS
+                    SELECT s.*, {cat_select} {name_select} d.*
+                    FROM `{sales_tbl_name}` s
+                    LEFT JOIN `{dim_tbl_name}` d ON {join_cond};
+                    """
+                    try:
+                        cursor.execute(view_sql)
+                        # Re-inspect to register _sales_unified
+                        return cls.inspect(conn)
+                    except Exception:
+                        pass
+
         return tables
+
+    @staticmethod
+    def _looks_numeric(value: Any) -> bool:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return True
+        if isinstance(value, str):
+            text = (
+                value.strip()
+                .replace(".", "")
+                .replace(",", "")
+                .replace("đ", "")
+                .replace("₫", "")
+                .replace(" ", "")
+            )
+            if text.startswith("-"):
+                text = text[1:]
+            return bool(text) and text.isdigit()
+        return False
 
     @classmethod
     def _infer_role(cls, col_name: str, samples: List[Any]) -> Optional[str]:
         clean_name = strip_accents(col_name)
+
+        # 0. Adjustments & specific payments (e.g. khach_tra, thu_may_cu, bot)
+        for kw, role in cls.ADJUSTMENT_KEYWORDS.items():
+            if kw == clean_name or kw in clean_name:
+                return role
 
         # 1. Order ID
         for kw in cls.ORDER_ID_KEYWORDS:
@@ -264,6 +356,11 @@ class SchemaInspector:
         for kw in cls.CUSTOMER_KEYWORDS:
             if kw in clean_name:
                 return "customer"
+
+        # 2b. Category
+        for kw in cls.CATEGORY_KEYWORDS:
+            if kw in clean_name:
+                return "category"
 
         # 3. Debt must be checked before Stock ("tong_no" starts with "tong" not "ton")
         for kw in cls.DEBT_KEYWORDS:
@@ -324,6 +421,16 @@ class SchemaInspector:
         for kw in cls.PRODUCT_KEYWORDS:
             if kw in clean_name:
                 return "product"
+
+        # 14. Viết tắt phổ biến (chỉ nhận khi giá trị mẫu phù hợp)
+        compact = re.sub(r"[^a-z0-9]", "", clean_name)
+        short_role = cls.SHORT_ROLE_NAMES.get(compact)
+        if short_role:
+            if short_role in ("total_amount", "unit_price", "quantity"):
+                if any(cls._looks_numeric(s) for s in samples):
+                    return short_role
+            else:
+                return short_role
 
         # Check sample values for date patterns
         for s in samples:

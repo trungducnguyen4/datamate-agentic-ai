@@ -33,6 +33,7 @@ htmlcov/
 temp/
 tmp/
 *.log
+.agent_*
 
 # OS
 .DS_Store

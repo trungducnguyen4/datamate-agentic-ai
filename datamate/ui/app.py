@@ -278,18 +278,30 @@ def run_all_qa_tests():
             "type": item["expected_type"],
             "answer": item["expected_answer"],
         }
-        eval_res = evaluate_single_answer(sub_item, ref)
-        if eval_res == EvaluationResult.CORRECT:
-            status = "PASS"
-            correct_count += 1
-            total_score += 1.0
-        elif eval_res == EvaluationResult.ABSTAIN:
-            status = "ABSTAIN"
-            abstain_count += 1
+        # BTC không phát hành reference kiểu "abstain" (abstain là kiểu dự đoán),
+        # nên các case demo "kỳ vọng abstain" được chấm riêng ở đây.
+        if item["expected_type"] == "abstain":
+            if sub_item.type.value == "abstain":
+                status = "PASS"
+                correct_count += 1
+                total_score += 1.0
+            else:
+                status = "FAIL"
+                wrong_count += 1
+                total_score -= 1.0
         else:
-            status = "FAIL"
-            wrong_count += 1
-            total_score -= 1.0
+            eval_res = evaluate_single_answer(sub_item, ref)
+            if eval_res == EvaluationResult.CORRECT:
+                status = "PASS"
+                correct_count += 1
+                total_score += 1.0
+            elif eval_res == EvaluationResult.ABSTAIN:
+                status = "ABSTAIN"
+                abstain_count += 1
+            else:
+                status = "FAIL"
+                wrong_count += 1
+                total_score -= 1.0
 
         results.append({
             "id": item["id"],

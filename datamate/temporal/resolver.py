@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 import re
 from typing import Optional, Tuple
 from datamate.data.calendar import get_festival_solar_date, get_lunar_range
+from datamate.data.calendar_csv import get_calendar
 
 
 @dataclass
@@ -30,6 +31,14 @@ class TemporalResolver:
     def parse_as_of_date(as_of_date_str: str) -> date:
         return datetime.strptime(as_of_date_str.strip(), "%Y-%m-%d").date()
 
+    @staticmethod
+    def _tet_year(query: str, default_year: int) -> int:
+        """Năm âm của dịp Tết được nhắc trong câu (mặc định = năm của as_of)."""
+        match = re.search(r"(?:tết|tet)\s*(?:năm|nam)?\s*(\d{4})", query)
+        if match:
+            return int(match.group(1))
+        return default_year
+
     @classmethod
     def resolve(cls, query: str, as_of_date_str: str) -> Optional[DateRange]:
         q = query.lower().strip()
@@ -48,29 +57,86 @@ class TemporalResolver:
             iso_d = iso_match.group(0)
             return DateRange(start_date=iso_d, end_date=iso_d, is_exact_day=True)
 
-        # 1. Complex Lunar expressions
-        # "từ mùng 1 đến rằm tháng giêng"
+        # 1. Lunar expressions (tra lịch bằng calendar.csv của BTC)
+        cal = get_calendar()
+
+        # 1a. "Tết Trung Thu" / "Tết Dương lịch" không phải Tết Nguyên Đán
+        is_mid_autumn = any(w in q for w in ["trung thu", "trungthu"])
+        is_solar_new_year = "dương lịch" in q or "duong lich" in q
+        if is_mid_autumn:
+            festival = cal.festival(8, 15, year) if cal else None
+            if festival:
+                return DateRange(start_date=festival.isoformat(), end_date=festival.isoformat(), is_exact_day=True)
+        if is_solar_new_year:
+            return DateRange(start_date=f"{year}-01-01", end_date=f"{year}-01-01", is_exact_day=True)
+
+        # 1b. "từ mùng 1 đến rằm tháng giêng"
         if any(w in q for w in ["từ mùng 1 đến rằm tháng giêng", "mùng 1 đến rằm tháng giêng", "mung 1 den ram thang gieng"]):
+            if cal:
+                start = cal.festival(1, 1, year)
+                end = cal.festival(1, 15, year)
+                if start and end:
+                    return DateRange(start_date=start.isoformat(), end_date=end.isoformat())
             r = get_lunar_range("mung_1_den_ram", year)
             if r:
                 return DateRange(start_date=r[0], end_date=r[1])
 
-        # "tháng giêng" / "tháng giêng năm nay"
+        # 1c. "tháng giêng" / "tháng giêng năm nay"
         if ("tháng giêng" in q or "thang gieng" in q) and not any(w in q for w in ["rằm tháng giêng", "ram thang gieng", "sau tết", "sau tet"]):
+            if cal:
+                bounds = cal.lunar_month_bounds(year, 1)
+                if bounds:
+                    return DateRange(start_date=bounds[0].isoformat(), end_date=bounds[1].isoformat())
             r = get_lunar_range("thang_gieng", year)
             if r:
                 return DateRange(start_date=r[0], end_date=r[1])
 
-        # "từ sau tết đến giờ", "từ sau tết đến nay", "sau tết đến giờ", "từ tết đến giờ", "từ tết đến nay"
-        if any(w in q for w in ["sau tết đến giờ", "sau tết đến nay", "từ tết đến giờ", "từ tết đến nay", "sau tết",
-                                "tu sau tet den gio", "tu sau tet den nay", "sau tet den gio", "tu tet den gio"]):
-            tet_date = get_festival_solar_date("tet", year)
-            if tet_date:
-                return DateRange(start_date=tet_date, end_date=anchor.strftime("%Y-%m-%d"))
+        # 1d. Tết Nguyên Đán: 23 tháng Chạp (năm âm trước) → hết mùng 10 tháng Giêng
+        tet_year = cls._tet_year(q, year)
+        tet_range = cal.tet_range(tet_year) if cal else None
+        if tet_range is None:
+            tet_day = get_festival_solar_date("tet", tet_year)
+            if tet_day:
+                d = date.fromisoformat(tet_day)
+                tet_range = (d, d)
+
+        if tet_range:
+            tet_start, tet_end = tet_range
+            before = tet_start - timedelta(days=1)
+
+            # "mùng 1/2/3 Tết" là một ngày cụ thể, không phải cả dịp Tết
+            for day in (1, 2, 3):
+                if f"mùng {day} tết" in q or f"mung {day} tet" in q:
+                    exact = cal.festival(1, day, tet_year) if cal else None
+                    if exact is None:
+                        label = f"mùng {day} tết"
+                        fallback = get_festival_solar_date(label, tet_year)
+                        if fallback:
+                            exact = date.fromisoformat(fallback)
+                    if exact:
+                        return DateRange(start_date=exact.isoformat(), end_date=exact.isoformat(), is_exact_day=True)
+
+            # "trước Tết": cùng số ngày ngay trước 23 tháng Chạp
+            if any(w in q for w in ["trước tết", "truoc tet", "trước tết đến", "so với trước tết"]):
+                if cal:
+                    window = cal.pre_tet_window(tet_year)
+                    if window:
+                        return DateRange(start_date=window[0].isoformat(), end_date=window[1].isoformat())
+                return DateRange(start_date=before.isoformat(), end_date=before.isoformat())
+
+            # "sau Tết đến giờ/nay": BTC không định nghĩa riêng cụm này trong rulebook;
+            # giữ quy ước "sau mùng 1 Tết" (ngày kế tiếp mùng 1) như baseline cũ.
+            if any(w in q for w in ["sau tết", "sau tet", "từ tết đến giờ", "tu tet den gio", "từ tết đến nay"]):
+                start = tet_start + timedelta(days=1)
+                return DateRange(start_date=start.isoformat(), end_date=anchor.isoformat())
+
+            # "dịp Tết", "mùa Tết", "tết năm Y", "tết" ...
+            if any(w in q for w in ["tết", "tet"]):
+                return DateRange(start_date=tet_start.isoformat(), end_date=tet_end.isoformat())
 
         # Single Lunar festivals (Order from most specific to least specific)
         for fest in ["tết nguyên đán", "mùng 1 tết", "mùng 2 tết", "mùng 3 tết", "mung 1 tet", "mung 2 tet", "mung 3 tet",
-                     "rằm tháng giêng", "ram thang gieng", "vu lan", "trung thu", "tết", "tet"]:
+                     "rằm tháng giêng", "ram thang gieng", "vu lan", "tết", "tet"]:
             if fest in q:
                 clean_fest = fest.replace("mung", "mùng").replace("ram thang gieng", "rằm tháng giêng").replace("tet", "tết")
                 s_date = get_festival_solar_date(clean_fest, year)
@@ -147,6 +213,11 @@ class TemporalResolver:
             q_num = roman_map.get(raw_q, 1)
             start_m = (q_num - 1) * 3 + 1
             end_m = q_num * 3
+            # Rule 34: Tháng M, quý Q không ghi năm: của năm nay nếu không sau hôm nay; sau hôm nay thì của năm trước.
+            if not quarter_match.group(2) and not any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
+                q_start_date = date(target_yr, start_m, 1)
+                if q_start_date > anchor:
+                    target_yr = year - 1
             last_day = calendar.monthrange(target_yr, end_m)[1]
             return DateRange(
                 start_date=f"{target_yr:04d}-{start_m:02d}-01",
@@ -171,16 +242,21 @@ class TemporalResolver:
                 end_date=f"{y:04d}-12-31",
             )
 
-        # Specific single month without year: "tháng 1", "tháng 2", ... (assuming anchor year)
+        # Specific single month without year: "tháng 1", "tháng 2", ...
         single_month_match = re.search(r"\bth[aá]ng\s*(\d{1,2})\b", q)
         if single_month_match and not any(w in q for w in ["tháng này", "tháng trước", "tháng rồi", "tháng vừa rồi", "tháng ni", "thang nay", "thang truoc"]):
             m = int(single_month_match.group(1))
             if 1 <= m <= 12:
-                last_day = calendar.monthrange(year, m)[1]
+                # Rule 34: Tháng M, quý Q không ghi năm: của năm nay nếu không sau hôm nay; sau hôm nay thì của năm trước.
+                target_yr = year
+                m_start_date = date(target_yr, m, 1)
+                if m_start_date > anchor:
+                    target_yr = year - 1
+                last_day = calendar.monthrange(target_yr, m)[1]
                 return DateRange(
-                    start_date=f"{year:04d}-{m:02d}-01",
-                    end_date=f"{year:04d}-{m:02d}-{last_day:02d}",
-                    target_month=f"{year:04d}-{m:02d}",
+                    start_date=f"{target_yr:04d}-{m:02d}-01",
+                    end_date=f"{target_yr:04d}-{m:02d}-{last_day:02d}",
+                    target_month=f"{target_yr:04d}-{m:02d}",
                 )
 
         # 9. "Hôm nay", "hôm qua", "hôm kia"
@@ -244,9 +320,10 @@ class TemporalResolver:
             )
 
         if any(w in q for w in ["năm nay", "năm ni", "nam nay", "nam ni"]):
+            # Rulebook: "từ đầu năm tới nay" = 01/01 → hết hôm nay (không phải 31/12)
             return DateRange(
                 start_date=f"{year:04d}-01-01",
-                end_date=f"{year:04d}-12-31",
+                end_date=anchor.strftime("%Y-%m-%d"),
             )
 
         return None

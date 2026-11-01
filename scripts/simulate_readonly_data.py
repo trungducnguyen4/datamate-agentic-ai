@@ -33,16 +33,19 @@ def main() -> None:
         sys.exit(f"Không tìm thấy {src}")
 
     root = tempfile.mkdtemp()
+    biz = os.path.join(root, args.business)
+    os.makedirs(biz, exist_ok=True)
     for name in os.listdir(src):
         path = os.path.join(src, name)
         if os.path.isfile(path):
-            shutil.copy(path, os.path.join(root, args.business))
+            shutil.copy(path, biz)
 
     real_makedirs = os.makedirs
 
     def read_only_makedirs(path, *a, **kw):
-        if ".cache_sqlite" in str(path):
-            raise OSError(errno.EROFS, "Read-only file system", str(path))
+        text = str(path)
+        if ".cache_sqlite" in text or "datamate_cache" in text:
+            raise OSError(errno.EROFS, "Read-only file system", text)
         return real_makedirs(path, *a, **kw)
 
     os.makedirs = read_only_makedirs
