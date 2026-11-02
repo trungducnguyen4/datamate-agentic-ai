@@ -285,6 +285,38 @@ class TemporalResolver:
         if re.search(r"\bth[aá]ng\s*(1[3-9]|[2-9]\d)\b", q):
             return DateRange(start_date="9999-12-31", end_date="9999-12-31")
 
+        # 5b. Date Range expressions:
+        # e.g., "từ ngày 1/1 đến hết hôm nay", "tính từ ngày 1/1 đến hôm nay", "từ 01/01 đến nay", "từ ngày 1/1 đến nay"
+        range_to_today_match = re.search(
+            r"(?:từ|tu|tinh tu|tính từ)?\s*(?:ngày|ngay)?\s*(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?\s*(?:đến|tới|den|toi)\s*(?:hết\s+|het\s+)?(?:hôm nay|hom nay|hnay|nay|bữa nay|bua nay)",
+            q
+        )
+        if range_to_today_match:
+            d_day = int(range_to_today_match.group(1))
+            d_mon = int(range_to_today_match.group(2))
+            d_yr = int(range_to_today_match.group(3)) if range_to_today_match.group(3) else year
+            return DateRange(
+                start_date=f"{d_yr:04d}-{d_mon:02d}-{d_day:02d}",
+                end_date=anchor.strftime("%Y-%m-%d"),
+            )
+
+        # e.g., "từ ngày 01/01/2026 đến ngày 15/01/2026", "từ 01/01 đến 15/01", "ngày 01/01 đến 15/01"
+        range_between_dates_match = re.search(
+            r"(?:từ|tinh tu|tính từ)?\s*(?:ngày|ngay)?\s*(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?\s*(?:đến|tới|den|toi)\s*(?:ngày|ngay)?\s*(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?",
+            q
+        )
+        if range_between_dates_match:
+            d1_day = int(range_between_dates_match.group(1))
+            d1_mon = int(range_between_dates_match.group(2))
+            d1_yr = int(range_between_dates_match.group(3)) if range_between_dates_match.group(3) else year
+            d2_day = int(range_between_dates_match.group(4))
+            d2_mon = int(range_between_dates_match.group(5))
+            d2_yr = int(range_between_dates_match.group(6)) if range_between_dates_match.group(6) else (d1_yr or year)
+            return DateRange(
+                start_date=f"{d1_yr:04d}-{d1_mon:02d}-{d1_day:02d}",
+                end_date=f"{d2_yr:04d}-{d2_mon:02d}-{d2_day:02d}",
+            )
+
         # 6. Explicit specific date DD/MM or DD/MM/YYYY
         # e.g., "ngày 03/04/2026", "ngày 04/03", "ngay 04/03", "03-04-2026"
         date_explicit_match = re.search(r"(?:ngày|ngay)\s*(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?", q)

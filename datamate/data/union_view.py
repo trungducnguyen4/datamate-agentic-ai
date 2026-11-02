@@ -159,7 +159,7 @@ def _expr(column: Optional[str], alias: str, cast: str = "TEXT") -> str:
 
 def _select_for_table(table: str, mapping: Dict[str, str]) -> str:
     return (
-        f"SELECT {_expr(mapping.get('date'), 'ngay')}, "
+        f"SELECT DISTINCT {_expr(mapping.get('date'), 'ngay')}, "
         f"{_expr(mapping.get('product'), 'ten_san_pham')}, "
         f"{_expr(mapping.get('product_code'), 'ma_san_pham')}, "
         f"{_expr(mapping.get('quantity'), 'so_luong', 'REAL')}, "
@@ -255,7 +255,7 @@ def _is_header_table(name: str, info: TableInfo) -> bool:
     if any(token in clean for token in ("chi_tiet", "chitiet", "nhap", "phieu_thu", "phieuthu", "giao")):
         return False
     roles = {c.semantic_role for c in info.columns if c.semantic_role}
-    return {"date", "order_id", "total_amount"} <= roles and "product" not in roles
+    return {"date", "order_id"} <= roles and "product" not in roles
 
 
 def _is_detail_table(name: str, info: TableInfo) -> bool:
@@ -265,7 +265,7 @@ def _is_detail_table(name: str, info: TableInfo) -> bool:
     if any(token in clean for token in ("lo", "nhap", "giao")):
         return False
     roles = {c.semantic_role for c in info.columns if c.semantic_role}
-    return {"order_id", "product"} <= roles and bool({"quantity", "total_amount"} & roles)
+    return {"order_id", "product"} <= roles and bool({"quantity", "total_amount", "unit_price"} & roles)
 
 
 def _header_mapping(info: TableInfo) -> Dict[str, str]:
@@ -334,7 +334,7 @@ def _build_header_detail_union(conn: sqlite3.Connection, tables: Dict[str, Table
     header_selects = []
     for name, _, mapping in headers:
         header_selects.append(
-            f"SELECT {_expr(mapping.get('order_id'), 'ma_hoa_don')}, "
+            f"SELECT DISTINCT {_expr(mapping.get('order_id'), 'ma_hoa_don')}, "
             f"{_expr(mapping.get('date'), 'ngay')}, "
             f"{_expr(mapping.get('status'), 'trang_thai')}, "
             f"{_expr(mapping.get('customer'), 'khach_hang')} FROM `{name}`"
@@ -342,7 +342,7 @@ def _build_header_detail_union(conn: sqlite3.Connection, tables: Dict[str, Table
     detail_selects = []
     for name, _, mapping in details:
         detail_selects.append(
-            f"SELECT {_expr(mapping.get('order_id'), 'ma_hoa_don')}, "
+            f"SELECT DISTINCT {_expr(mapping.get('order_id'), 'ma_hoa_don')}, "
             f"{_expr(mapping.get('product'), 'ten_san_pham')}, "
             f"{_expr(mapping.get('product_code'), 'ma_san_pham')}, "
             f"{_expr(mapping.get('quantity'), 'so_luong', 'REAL')}, "
@@ -351,17 +351,26 @@ def _build_header_detail_union(conn: sqlite3.Connection, tables: Dict[str, Table
             f"{_expr(mapping.get('discount'), 'giam_gia', 'REAL')} FROM `{name}`"
         )
 
+    conn.execute("DROP TABLE IF EXISTS _tmp_headers;")
+    conn.execute("DROP TABLE IF EXISTS _tmp_details;")
+    conn.execute(f"CREATE TEMP TABLE _tmp_headers AS {' UNION ALL '.join(header_selects)};")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tmp_h_mhd ON _tmp_headers(ma_hoa_don);")
+    conn.execute(f"CREATE TEMP TABLE _tmp_details AS {' UNION ALL '.join(detail_selects)};")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tmp_d_mhd ON _tmp_details(ma_hoa_don);")
+
     select_sql = (
-        f"SELECT h.ngay AS ngay, d.ten_san_pham AS ten_san_pham, "
-        f"d.ma_san_pham AS ma_san_pham, d.so_luong AS so_luong, "
-        f"d.thanh_tien AS thanh_tien, h.trang_thai AS trang_thai, "
-        f"h.khach_hang AS khach_hang, d.ma_hoa_don AS ma_hoa_don, "
-        f"d.don_gia AS don_gia, d.giam_gia AS giam_gia "
-        f"FROM ({' UNION ALL '.join(detail_selects)}) d "
-        f"JOIN ({' UNION ALL '.join(header_selects)}) h "
-        f"ON d.ma_hoa_don = h.ma_hoa_don"
+        "SELECT h.ngay AS ngay, d.ten_san_pham AS ten_san_pham, "
+        "d.ma_san_pham AS ma_san_pham, d.so_luong AS so_luong, "
+        "d.thanh_tien AS thanh_tien, h.trang_thai AS trang_thai, "
+        "h.khach_hang AS khach_hang, d.ma_hoa_don AS ma_hoa_don, "
+        "d.don_gia AS don_gia, d.giam_gia AS giam_gia "
+        "FROM _tmp_details d "
+        "JOIN _tmp_headers h "
+        "ON d.ma_hoa_don = h.ma_hoa_don"
     )
     _materialize(conn, select_sql)
+    conn.execute("DROP TABLE IF EXISTS _tmp_headers;")
+    conn.execute("DROP TABLE IF EXISTS _tmp_details;")
     return UNIFIED_VIEW
 
 

@@ -37,8 +37,17 @@ class BusinessRuleCompiler:
         rulebook: Optional[Any] = None,
         readme_text: str = "",
     ) -> CompiledQueryPlan:
+        # Collect known product names from tables sample values
+        known_products = []
+        for t in tables.values():
+            for c in t.columns:
+                if c.semantic_role == "product":
+                    for s in c.sample_values:
+                        if isinstance(s, str) and len(s.strip()) >= 3:
+                            known_products.append(s.strip())
+
         # 1. Process query with Vietnamese NLP engine
-        nlp_info = VietnameseNLP.process_query(question)
+        nlp_info = VietnameseNLP.process_query(question, catalog_products=known_products)
         clean_q = nlp_info.clean_query
 
         # 2. Check explicitly unanswerable question classes
@@ -88,29 +97,47 @@ class BusinessRuleCompiler:
                     unanswerable_reason="Question asks for expiry dates but schema does not provide expiry column.",
                 )
 
-        # E. Inventory / Stock (NEG-03: Kho còn bao nhiêu thuốc Panadol?)
+        # E. Inventory / Stock (Kho còn bao nhiêu thuốc Panadol?)
         if nlp_info.is_stock_query:
-            has_stock = any(
-                any(
-                    c.semantic_role == "stock"
-                    or "ton_kho" in c.name.lower()
-                    or c.name.lower() == "ton"
-                    or "stock" in c.name.lower()
-                    for c in t.columns
-                )
-                for t in tables.values()
-            ) or any(
-                t_name.lower() in ("ton_kho", "kho", "stock", "inventory")
-                or "ton_kho" in t_name.lower()
-                for t_name in tables
-            )
-            if not has_stock:
+            stock_tbl_name = None
+            stock_qty_col = None
+            stock_prod_col = None
+            for t_name, t in tables.items():
+                if any(k in t_name.lower() for k in ("ton_kho", "tonkho", "kho", "stock", "inventory")) or any(c.semantic_role == "stock" for c in t.columns):
+                    stock_tbl_name = t_name
+                    for c in t.columns:
+                        if c.semantic_role == "stock" or any(k in c.name.lower() for k in ("ton_cuoi", "cuoi_ky", "sl_ton", "ton", "stock", "so_luong")):
+                            stock_qty_col = c.name
+                            break
+                    for c in t.columns:
+                        if c.semantic_role == "product" or any(k in c.name.lower() for k in ("ten_hang", "ten_sp", "ten", "san_pham", "hang", "mat_hang")):
+                            stock_prod_col = c.name
+                            break
+                    if stock_tbl_name and stock_qty_col:
+                        break
+
+            if stock_tbl_name and stock_qty_col:
+                if nlp_info.has_specific_product and stock_prod_col:
+                    return CompiledQueryPlan(
+                        intent="stock_product_quantity",
+                        expected_type=AnswerType.NUMBER,
+                        sql=f"SELECT `{stock_qty_col}` FROM `{stock_tbl_name}` WHERE LOWER(`{stock_prod_col}`) LIKE ? LIMIT 1;",
+                        params=(f"%{nlp_info.has_specific_product.lower()}%",),
+                        confidence=0.95,
+                    )
                 return CompiledQueryPlan(
-                    intent="unanswerable_missing_stock",
-                    expected_type=AnswerType.UNANSWERABLE,
-                    confidence=1.0,
-                    unanswerable_reason="Question asks for warehouse stock but no inventory table/column exists.",
+                    intent="abstain_stock_ambiguous",
+                    expected_type=AnswerType.ABSTAIN,
+                    confidence=0.8,
                 )
+
+            # If no stock table or column exists in the entire database (NEG-03)
+            return CompiledQueryPlan(
+                intent="unanswerable_missing_stock",
+                expected_type=AnswerType.UNANSWERABLE,
+                confidence=1.0,
+                unanswerable_reason="Question asks for warehouse stock but no inventory table/column exists.",
+            )
 
         # F. Employee sales (NEG-08: Doanh thu của nhân viên Nguyễn Văn A?)
         if nlp_info.is_employee_query:
@@ -217,10 +244,10 @@ class BusinessRuleCompiler:
             if include_status and status_col:
                 clauses.append(
                     f"(`{status_col}` IS NULL OR ("
-                    f"`{status_col}` NOT LIKE '%hủy%' AND `{status_col}` NOT LIKE '%huỷ%' AND `{status_col}` NOT LIKE '%cancel%' "
-                    f"AND `{status_col}` NOT LIKE '%trả hàng%' AND `{status_col}` NOT LIKE '%đổi trả%' "
-                    f"AND `{status_col}` NOT LIKE '%hoàn trả%' AND `{status_col}` NOT LIKE '%hoàn tiền%' "
-                    f"AND `{status_col}` NOT LIKE '%trả lại%' AND `{status_col}` NOT LIKE '%return%' "
+                    f"LOWER(`{status_col}`) NOT LIKE '%hủy%' AND LOWER(`{status_col}`) NOT LIKE '%huỷ%' AND LOWER(`{status_col}`) NOT LIKE '%cancel%' "
+                    f"AND LOWER(`{status_col}`) NOT LIKE '%trả hàng%' AND LOWER(`{status_col}`) NOT LIKE '%đổi trả%' "
+                    f"AND LOWER(`{status_col}`) NOT LIKE '%hoàn trả%' AND LOWER(`{status_col}`) NOT LIKE '%hoàn tiền%' "
+                    f"AND LOWER(`{status_col}`) NOT LIKE '%trả lại%' AND LOWER(`{status_col}`) NOT LIKE '%return%' "
                     f"AND LOWER(`{status_col}`) != 'trả' AND LOWER(`{status_col}`) != 'tra'))"
                 )
             if time_range and date_col:
@@ -252,16 +279,16 @@ class BusinessRuleCompiler:
                     clauses.append(f"LOWER(`{prod_code_col}`) = ?")
                     params.append(custom_prod.lower())
                 elif prod_name_col:
-                    clauses.append(f"LOWER(`{prod_name_col}`) LIKE ?")
-                    params.append(f"%{custom_prod.lower()}%")
+                    clauses.append(f"unaccent(`{prod_name_col}`) LIKE ?")
+                    params.append(f"%{strip_accents(custom_prod).lower()}%")
             elif nlp_info.has_specific_product:
-                p = nlp_info.has_specific_product.lower()
-                if prod_code_col and "sp_" in p:
+                p = nlp_info.has_specific_product
+                if prod_code_col and "sp_" in p.lower():
                     clauses.append(f"LOWER(`{prod_code_col}`) = ?")
-                    params.append(p)
+                    params.append(p.lower())
                 elif prod_name_col:
-                    clauses.append(f"LOWER(`{prod_name_col}`) LIKE ?")
-                    params.append(f"%{p}%")
+                    clauses.append(f"unaccent(`{prod_name_col}`) LIKE ?")
+                    params.append(f"%{strip_accents(p).lower()}%")
             if nlp_info.has_specific_order and order_id_col:
                 clauses.append(f"UPPER(`{order_id_col}`) = ?")
                 params.append(nlp_info.has_specific_order.upper())
@@ -333,26 +360,29 @@ class BusinessRuleCompiler:
                 return cls._apply_guards(CompiledQueryPlan(intent="cancellation", expected_type=AnswerType.ABSTAIN), nlp_info, clean_q)
 
             where_str, params = build_where_clause(include_status=False)
+            cancel_match = f"(LOWER(`{status_col}`) LIKE '%hủy%' OR LOWER(`{status_col}`) LIKE '%huỷ%' OR LOWER(`{status_col}`) LIKE '%cancel%')"
             if nlp_info.is_canceled_revenue_query:
-                where_clause = f"{where_str} AND (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')" if where_str else f"WHERE (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')"
+                where_clause = f"{where_str} AND {cancel_match}" if where_str else f"WHERE {cancel_match}"
                 sql = f"SELECT ROUND(COALESCE(SUM({amount_expr}), 0), 2) FROM `{sales_table}` {where_clause};"
                 return cls._apply_guards(CompiledQueryPlan(intent="canceled_revenue", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
-            elif any(w in clean_q for w in ["tỷ lệ", "phần trăm", "phan tram"]):
+            elif any(w in clean_q for w in ["tỷ lệ", "tỉ lệ", "phần trăm", "phan tram"]):
+                id_expr = f"`{order_id_col}`" if order_id_col else "*"
                 sql = f"""
                 SELECT ROUND(
-                    100.0 * SUM(CASE WHEN `{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%' THEN 1 ELSE 0 END)
-                    / NULLIF(COUNT(*), 0),
+                    100.0 * COUNT(DISTINCT CASE WHEN {cancel_match} THEN {id_expr} END)
+                    / NULLIF(COUNT(DISTINCT {id_expr}), 0),
                     2
                 ) FROM `{sales_table}` {where_str};
                 """
                 return cls._apply_guards(CompiledQueryPlan(intent="cancel_rate", expected_type=AnswerType.PERCENT, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
             elif bool(re.search(r"\b(có|co)\b.*\b(không|khong)\b", clean_q.rstrip("?").strip())) and not any(w in clean_q for w in ["bao nhiêu", "mấy", "số đơn", "bn", "nhiêu"]):
-                where_cancel = f"{where_str} AND (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')" if where_str else f"WHERE (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')"
+                where_cancel = f"{where_str} AND {cancel_match}" if where_str else f"WHERE {cancel_match}"
                 sql = f"SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END FROM `{sales_table}` {where_cancel};"
                 return cls._apply_guards(CompiledQueryPlan(intent="cancel_boolean", expected_type=AnswerType.BOOLEAN, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
             else:
-                where_cancel = f"{where_str} AND (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')" if where_str else f"WHERE (`{status_col}` LIKE '%hủy%' OR `{status_col}` LIKE '%cancel%')"
-                sql = f"SELECT COUNT(*) FROM `{sales_table}` {where_cancel};"
+                where_cancel = f"{where_str} AND {cancel_match}" if where_str else f"WHERE {cancel_match}"
+                id_expr = f"DISTINCT `{order_id_col}`" if order_id_col else "*"
+                sql = f"SELECT COUNT({id_expr}) FROM `{sales_table}` {where_cancel};"
                 return cls._apply_guards(CompiledQueryPlan(intent="cancel_count", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
 
         # 10. Intent: Debts
@@ -413,13 +443,13 @@ class BusinessRuleCompiler:
                 sql = f"SELECT {target_col} FROM `{sales_table}` {where_str} ORDER BY {amount_expr} ASC LIMIT 1;"
                 return cls._apply_guards(CompiledQueryPlan(intent="order_min", expected_type=res_type, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
 
-        # 11b. Intent: Average per order queries (BM_AGG_01, BM_AGG_05)
+        # 11b. Intent: Average per order queries (Rulebook line 48 & line 133: làm tròn về đồng -> 0 decimals)
         if nlp_info.is_avg_order_revenue_query:
             if not sales_table or not amount_expr:
                 return cls._apply_guards(CompiledQueryPlan(intent="avg_order_revenue", expected_type=AnswerType.ABSTAIN), nlp_info, clean_q)
             where_str, params = build_where_clause()
             order_div = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
-            sql = f"SELECT ROUND(SUM({amount_expr}) * 1.0 / NULLIF({order_div}, 0), 2) FROM `{sales_table}` {where_str};"
+            sql = f"SELECT ROUND(SUM({amount_expr}) * 1.0 / NULLIF({order_div}, 0), 0) FROM `{sales_table}` {where_str};"
             return cls._apply_guards(CompiledQueryPlan(intent="avg_order_revenue", expected_type=AnswerType.NUMBER, sql=sql.strip(), params=tuple(params)), nlp_info, clean_q)
 
         if nlp_info.is_avg_order_qty_query:
@@ -565,15 +595,20 @@ class BusinessRuleCompiler:
                 return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.ABSTAIN)
             where_str, params = build_where_clause()
             if any(w in clean_q for w in ["đắt khách", "dat khach", "đông khách", "dong khach", "nhiều đơn nhất"]):
-                metric = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
+                order_expr = f"COUNT(DISTINCT `{order_id_col}`)" if order_id_col else "COUNT(*)"
             else:
-                metric = amount_expr if (nlp_info.is_revenue_query or not nlp_info.is_quantity_query) else (qty_col or amount_expr)
+                agg_target = f"`{qty_col}`" if (nlp_info.is_quantity_query and qty_col) else amount_expr
+                order_expr = f"SUM({agg_target})"
+
+            is_min = any(w in clean_q for w in ["thấp nhất", "thap nhat", "ít nhất", "it nhat", "kém nhất", "kem nhat", "ế nhất", "e nhat"])
+            direction = "ASC" if is_min else "DESC"
+
             sql = f"""
             SELECT DATE(`{date_col}`)
             FROM `{sales_table}`
             {where_str}
             GROUP BY DATE(`{date_col}`)
-            ORDER BY {metric} DESC, DATE(`{date_col}`) ASC
+            ORDER BY {order_expr} {direction}, DATE(`{date_col}`) ASC
             LIMIT 1;
             """
             return CompiledQueryPlan(intent="which_day", expected_type=AnswerType.DATE, sql=sql.strip(), params=tuple(params), confidence=0.96)
@@ -705,7 +740,19 @@ class BusinessRuleCompiler:
                 periods = TemporalResolver.resolve_comparison_periods(clean_q, as_of_date_str)
                 if periods:
                     cur_p, prev_p = periods
-                    status_clause = f"(`{status_col}` IS NULL OR (`{status_col}` NOT LIKE '%hủy%' AND `{status_col}` NOT LIKE '%cancel%' AND `{status_col}` NOT LIKE '%trả hàng%'))" if status_col else "1=1"
+                    conds = []
+                    if status_col:
+                        conds.append(
+                            f"(`{status_col}` IS NULL OR ("
+                            f"LOWER(`{status_col}`) NOT LIKE '%hủy%' AND LOWER(`{status_col}`) NOT LIKE '%huỷ%' AND LOWER(`{status_col}`) NOT LIKE '%cancel%' "
+                            f"AND LOWER(`{status_col}`) NOT LIKE '%trả hàng%' AND LOWER(`{status_col}`) NOT LIKE '%đổi trả%' "
+                            f"AND LOWER(`{status_col}`) NOT LIKE '%hoàn trả%' AND LOWER(`{status_col}`) NOT LIKE '%hoàn tiền%' "
+                            f"AND LOWER(`{status_col}`) NOT LIKE '%trả lại%' AND LOWER(`{status_col}`) NOT LIKE '%return%' "
+                            f"AND LOWER(`{status_col}`) != 'trả' AND LOWER(`{status_col}`) != 'tra'))"
+                        )
+                    if prod_name_col:
+                        conds.append(f"(`{prod_name_col}` IS NULL OR LOWER(`{prod_name_col}`) NOT LIKE '%phí phục vụ%')")
+                    status_clause = " AND ".join(conds) if conds else "1=1"
                     sql = f"""
                     WITH cur AS (
                         SELECT COALESCE(SUM({amount_expr}), 0.0) AS val

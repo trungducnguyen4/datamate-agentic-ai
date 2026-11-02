@@ -2,7 +2,15 @@ from __future__ import annotations
 import re
 import sqlite3
 import time
+import unicodedata
 from typing import Any, List, Optional, Tuple
+
+
+def _strip_accents(text: str) -> str:
+    if not text:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", str(text))
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).replace("đ", "d").replace("Đ", "D")
 
 
 class SQLExecutionError(Exception):
@@ -72,10 +80,11 @@ class SafeSQLExecutor:
             if re.search(rf"\b{kw}\b", clean_sql, re.IGNORECASE):
                 raise SQLSecurityError(f"Dangerous keyword detected: {kw}")
 
-        # Register Unicode-aware LOWER and UPPER functions for Vietnamese text
+        # Register Unicode-aware LOWER, UPPER and UNACCENT functions for Vietnamese text
         try:
             conn.create_function("lower", 1, lambda s: str(s).lower() if s is not None else None)
             conn.create_function("upper", 1, lambda s: str(s).upper() if s is not None else None)
+            conn.create_function("unaccent", 1, lambda s: _strip_accents(str(s)).lower() if s is not None else None)
         except Exception:
             pass
 

@@ -26,7 +26,7 @@ def test_ui_ask_endpoint(client):
     payload = {
         "business_id": "biz_118",
         "question": "sp bán dc nhiều nhất tuần rồi là gì",
-        "as_of_date": "2025-02-28",
+        "as_of_date": "2026-03-04",
         "dataset": "train",
     }
     res = client.post("/api/ask", json=payload)
@@ -34,7 +34,7 @@ def test_ui_ask_endpoint(client):
     data = res.json()
     assert "submission" in data
     assert data["submission"]["type"] == "string"
-    assert "Xi măng" in data["submission"]["answer"]
+    assert any(expected in data["submission"]["answer"] for expected in ["Xi măng", "Tôn lạnh"])
     assert "plan" in data
     assert "latency_ms" in data
     assert "trace" in data

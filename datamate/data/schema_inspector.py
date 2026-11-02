@@ -47,21 +47,22 @@ class SchemaInspector:
     DEBT_KEYWORDS = ["cong_no", "tong_no", "con_no", "so_no", "tien_no", "debt", "chua_tra", "no_phai_tra"]
     DATE_KEYWORDS = ["ngay", "date", "created", "time", "thoi_gian", "order_date", "gio"]
     STATUS_KEYWORDS = ["trang_thai", "status", "state", "tinh_trang", "ket_qua"]
-    TOTAL_AMOUNT_KEYWORDS = ["thanh_tien", "tong_tien", "doanh_thu", "total_amount", "amount", "subtotal", "tong", "tri_gia"]
+    TOTAL_AMOUNT_KEYWORDS = ["thanh_tien", "tong_tien", "doanh_thu", "total_amount", "amount", "subtotal", "tong", "tri_gia", "tong_tien_hang", "tong_sau_giam_gia", "t_tien", "ttien"]
     QUANTITY_KEYWORDS = ["so_luong", "quantity", "qty", "sl", "quy_ra_dv_le", "so_luong_quy_doi", "so_luong_giao"]
-    UNIT_PRICE_KEYWORDS = ["don_gia", "unit_price", "price", "gia_ban", "gia_niem_yet", "don_gia_ban"]
+    UNIT_PRICE_KEYWORDS = ["don_gia", "unit_price", "price", "gia_ban", "gia_niem_yet", "don_gia_ban", "gia_don_vi", "gia_le", "gia_moi", "gia_cu"]
     PRODUCT_KEYWORDS = [
         "san_pham", "sp", "product", "item", "hang_hoa", "mat_hang", "ten_sp", "ma_sp",
         "ten_mon", "mon_an", "mon", "do_uong", "ten_thuoc", "thuoc", "vat_tu", "dich_vu",
-        "noi_dung", "hang_hoa", "mat_hang", "ghi_tat", "viet_tat"
+        "noi_dung", "hang_hoa", "mat_hang", "ghi_tat", "viet_tat",
+        "ten_hang", "ma_hang", "id_sp", "hang", "thuoc_tinh",
     ]
     ORDER_ID_KEYWORDS = [
         "ma_hoa_don", "ma_don", "ma_dh", "order_id", "invoice_id", "so_hoa_don", "so_hd", "ma_giao_dich",
-        "stt", "so_tt", "so_thu_tu"
+        "stt", "so_tt", "so_thu_tu", "ma_chung_tu", "chung_tu", "so_chung_tu", "so_phieu"
     ]
     COST_KEYWORDS = ["gia_von", "cost", "chi_phi", "von", "loi_nhuan", "lai", "gia_nhap"]
     EXPIRY_KEYWORDS = ["han_su_dung", "hsd", "exp_date", "expiry", "ngay_het_han", "han_dung"]
-    STOCK_KEYWORDS = ["ton_kho", "stock", "so_luong_ton", "hang_ton", "sl_ton", "tonkho"]
+    STOCK_KEYWORDS = ["ton_kho", "stock", "so_luong_ton", "hang_ton", "sl_ton", "tonkho", "ton_cuoi", "ton_cuoi_ky"]
     EMPLOYEE_KEYWORDS = ["nhan_vien", "staff", "seller", "nguoi_ban", "nv"]
     DEBT_DUE_KEYWORDS = ["han_tra", "ngay_den_han", "ngay_no", "ngay_vay", "due_date", "han_thanh_toan"]
     CATEGORY_KEYWORDS = ["loai", "loai_hang", "nhom", "nhom_hang", "nganh_hang", "category", "phan_loai"]
