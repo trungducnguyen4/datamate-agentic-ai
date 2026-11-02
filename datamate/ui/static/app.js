@@ -63,6 +63,12 @@ async function onBusinessChange(bizId) {
   if (b && readmeEl) {
     readmeEl.textContent = b.readme || 'Không có mô tả';
   }
+  const badge = document.getElementById('tableCountBadge');
+  const container = document.getElementById('tablesContainer');
+  if (badge) badge.innerHTML = '<i class="fa-solid fa-spinner animate-spin text-[10px]"></i> Đang nạp...';
+  if (container) {
+    container.innerHTML = '<div class="p-6 text-center text-xs text-slate-400 italic flex flex-col items-center gap-2"><i class="fa-solid fa-spinner animate-spin text-blue-400 text-lg"></i><span>Đang nạp và phân tích cấu trúc bảng...</span></div>';
+  }
   await loadSampleQuestions(bizId);
   try {
     const res = await fetch(`/api/business/${bizId}/tables?dataset=` + currentDataset);
@@ -71,6 +77,8 @@ async function onBusinessChange(bizId) {
     renderTables(currentTables);
   } catch (e) {
     console.error('Error loading tables:', e);
+    if (badge) badge.textContent = '0 bảng';
+    if (container) container.innerHTML = `<p class="text-xs text-rose-400 italic text-center py-6">Lỗi tải bảng: ${e.message}</p>`;
   }
 }
 
@@ -549,21 +557,30 @@ async function ask() {
   const qInput = document.getElementById('questionInput');
   const question = qInput ? qInput.value.trim() : '';
   const asOfEl = document.getElementById('asOfDate');
-  const asOfDate = asOfEl ? asOfEl.value : '2026-03-04';
+  let asOfDate = asOfEl ? asOfEl.value.trim() : '2026-03-04';
+  if (!asOfDate) asOfDate = '2026-03-04';
+
+  // Defensive date format normalization (DD/MM/YYYY -> YYYY-MM-DD)
+  if (asOfDate.includes('/')) {
+    const parts = asOfDate.split('/');
+    if (parts.length === 3 && parts[2].length === 4) {
+      asOfDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+    }
+  }
 
   if (!bizId) {
-    alert('Vui lòng chọn một doanh nghiệp!');
+    showInlineError('Vui lòng chọn một doanh nghiệp!');
     return;
   }
   if (!question) {
-    alert('Vui lòng nhập câu hỏi!');
+    showInlineError('Vui lòng nhập câu hỏi trước khi nhấn Hỏi Agent!');
     return;
   }
 
   const btn = document.getElementById('askBtn');
   if (btn) {
     btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Đang xử lý...';
+    btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Đang suy luận...';
   }
 
   const flowBadge = document.getElementById('flowStatusBadge');
@@ -585,12 +602,25 @@ async function ask() {
     const data = await res.json();
     renderResult(data);
   } catch (e) {
-    alert('Lỗi truy vấn: ' + e.message);
+    console.error('Lỗi truy vấn agent:', e);
+    showInlineError(e.message);
   } finally {
     if (btn) {
       btn.disabled = false;
       btn.innerHTML = '<span>Hỏi Agent</span><i class="fa-solid fa-paper-plane text-[10px]"></i>';
     }
+  }
+}
+
+function showInlineError(msg) {
+  const ansVal = document.getElementById('answerValue');
+  const typeBadge = document.getElementById('answerTypeBadge');
+  if (typeBadge) {
+    typeBadge.className = 'text-xs px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/30 font-mono';
+    typeBadge.textContent = 'ERROR';
+  }
+  if (ansVal) {
+    ansVal.innerHTML = `<span class="text-rose-400"><i class="fa-solid fa-triangle-exclamation mr-2"></i>Lỗi xử lý</span> <span class="text-xs font-normal text-slate-400 block mt-1">${msg}</span>`;
   }
 }
 

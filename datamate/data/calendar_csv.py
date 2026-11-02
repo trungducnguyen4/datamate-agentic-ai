@@ -158,6 +158,7 @@ def get_calendar() -> Optional[LunarCalendar]:
             os.path.join(os.getcwd(), "data", "train", "calendar.csv"),
             os.path.join(os.getcwd(), "data", "public_test", "calendar.csv"),
             os.path.join(os.sep, "data", "calendar.csv"),
+            os.path.join(os.sep, "app", "calendar.csv"),
         ]
         for path in candidates:
             if not path or not os.path.isfile(path):

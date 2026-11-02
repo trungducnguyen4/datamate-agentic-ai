@@ -2,7 +2,7 @@
 
 Chấm theo đúng định nghĩa Penalized Accuracy của Zalo AI Challenge 2026:
     s_i = +1 correct, 0 abstain, -1 wrong
-và dùng cả `alias` (các dạng tên/mã được chấp nhận) như BTC.
+và dùng một hàm evaluator duy nhất (canonical evaluator trong `datamate.evaluator.metric`).
 
 Ví dụ:
     python -m scripts.eval_train_pa --data-dir data/train/data
@@ -16,28 +16,14 @@ import os
 import time
 from typing import Any, Dict, List
 
-from datamate.core.normalizer import normalize_string
 from datamate.core.types import QuestionItem
 from datamate.engine.agent import DataMateAgent
-from datamate.evaluator.metric import evaluate_single_answer
+from datamate.evaluator.metric import compute_penalized_accuracy, evaluate_single_answer
 
 
 def load_jsonl(path: str) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
-
-
-def score(pred: Dict[str, Any], ref: Dict[str, Any]) -> str:
-    """Official-style scoring, accepting every alias form for string answers."""
-    if ref.get("type") == "string":
-        if pred.get("type") == "abstain":
-            return "abstain"
-        if pred.get("type") != "string":
-            return "wrong"
-        forms = [ref.get("answer")] + list(ref.get("alias") or [])
-        candidate = normalize_string(pred.get("answer"))
-        return "correct" if any(candidate == normalize_string(f) for f in forms) else "wrong"
-    return evaluate_single_answer(pred, ref).value
 
 
 def main() -> None:
@@ -52,7 +38,11 @@ def main() -> None:
     questions = load_jsonl(args.questions)
     if args.limit:
         questions = questions[: args.limit]
-    refs = {r["id"]: r for r in load_jsonl(args.answers)}
+    all_refs = load_jsonl(args.answers)
+    refs_map = {r["id"]: r for r in all_refs}
+    # Limit references to the questions being evaluated
+    q_ids = {q["id"] for q in questions}
+    refs = [r for r in all_refs if r["id"] in q_ids]
 
     agent = DataMateAgent(args.data_dir)
     preds: List[Dict[str, Any]] = []
@@ -65,26 +55,25 @@ def main() -> None:
             out.write(json.dumps(item, ensure_ascii=False) + "\n")
 
     elapsed = time.time() - start
-    stats = collections.Counter()
-    per_type: Dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
-    for pred in preds:
-        ref = refs.get(pred["id"])
-        if ref is None:
-            continue
-        result = score(pred, ref)
-        stats[result] += 1
-        per_type[ref["type"]][result] += 1
+    metrics = compute_penalized_accuracy(preds, refs)
 
-    total = sum(stats.values())
-    print(f"questions={total} elapsed={elapsed:.1f}s ({elapsed / total * 1000:.0f} ms/câu)")
-    print(f"PA = {(stats['correct'] - stats['wrong']) / total:+.4f}")
-    print(f"correct={stats['correct']} wrong={stats['wrong']} abstain={stats['abstain']}")
+    per_type: Dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    pred_dict = {p["id"]: p for p in preds}
+    for r in refs:
+        p = pred_dict.get(r["id"])
+        res = evaluate_single_answer(p, r) if p is not None else EvaluationResult.ABSTAIN
+        per_type[r["type"]][res.value] += 1
+
+    total = metrics["total"]
+    print(f"questions={total} elapsed={elapsed:.1f}s ({elapsed / max(total, 1) * 1000:.0f} ms/câu)")
+    print(f"PA = {metrics['pa']:+.4f}")
+    print(f"correct={metrics['correct']} wrong={metrics['wrong']} abstain={metrics['abstain']}")
     for ref_type, counter in sorted(per_type.items()):
         n = sum(counter.values())
         print(
             f"  {ref_type:<13} n={n:<5} correct={counter['correct']:<4} "
             f"wrong={counter['wrong']:<5} abstain={counter['abstain']:<5} "
-            f"pa={(counter['correct'] - counter['wrong']) / n:+.3f}"
+            f"pa={(counter['correct'] - counter['wrong']) / max(n, 1):+.3f}"
         )
 
 

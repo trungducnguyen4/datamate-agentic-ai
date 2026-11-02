@@ -57,8 +57,11 @@ class NormalizedQueryInfo:
     is_consecutive_growth_query: bool = False
     is_cancellation_rate_query: bool = False
     is_table_query: bool = False
+    is_growth_query: bool = False
+    is_customer_count_query: bool = False
     category_filter: Optional[str] = None
     metric_target: Optional[str] = None
+    candidate_months: List[str] = field(default_factory=list)
 
 
 class VietnameseNLP:
@@ -94,7 +97,17 @@ class VietnameseNLP:
         r"\btui\b": "tôi",
         r"\bsl\b": "số lượng",
         r"\bdt\b": "doanh thu",
+        r"\bdthu\b": "doanh thu",
         r"\bkh\b": "khách hàng",
+        r"\bhqua\b": "hôm qua",
+        r"\bhq\b": "hôm qua",
+        r"\bhqa\b": "hôm qua",
+        r"\bhnay\b": "hôm nay",
+        r"\bbnhiu\b": "bao nhiêu",
+        r"\bbnhieu\b": "bao nhiêu",
+        r"\bbao nhiu\b": "bao nhiêu",
+        r"\bvs\b": "với",
+        r"\bvaayj\b": "vậy",
     }
 
     # Regional dialect mapping
@@ -103,6 +116,8 @@ class VietnameseNLP:
         r"\btháng ni\b": "tháng này",
         r"\btuần ni\b": "tuần này",
         r"\bngày ni\b": "ngày này",
+        r"\bhôm ni\b": "hôm nay",
+        r"\bhom ni\b": "hôm nay",
         r"\bnăm ni\b": "năm nay",
         r"\bđơn mô\b": "đơn nào",
         r"\bthuốc mô\b": "thuốc nào",
@@ -113,7 +128,7 @@ class VietnameseNLP:
         r"\brứa\b": "vậy",
         r"\brăng\b": "tại sao",
         r"\bhè\b": "",
-        r"\bchi\b": "gì",
+        r"\bchi\b(?!\s*(?:phí|phi|tiêu|tieu|nhập|nhap|ra|hàng|hang))": "gì",
         r"\bchừ\b": "hiện tại",
         # Northern & Southern dialect nuances
         r"\bto tiền nhất\b": "nhiều tiền nhất",
@@ -250,7 +265,7 @@ class VietnameseNLP:
     ]
 
     @classmethod
-    def process_query(cls, query: str) -> NormalizedQueryInfo:
+    def process_query(cls, query: str, catalog_products: Optional[List[str]] = None) -> NormalizedQueryInfo:
         """Fully process and normalize a Vietnamese question."""
         if not query:
             return NormalizedQueryInfo(original_query="", clean_query="")
@@ -260,9 +275,10 @@ class VietnameseNLP:
 
         # Step 1: Detect intent flags before stripping
         is_why_causal = bool(re.search(r"\b(tại sao|tai sao|vì sao|vi sao|nguyên nhân|nguyen nhan|răng|do đâu|do dau)\b", q))
-        is_future = bool(re.search(r"\b(dự đoán|dự báo|ngày mai|tháng sau|tuần sau|sắp tới|tương lai)\b", q))
+        is_comparative = bool(re.search(r"\b(tháng sau.*tháng trước|tháng trước.*tháng sau|hơn tháng|cao hơn|thấp hơn|nhiều hơn|ít hơn)\b", q))
+        is_future = bool(re.search(r"\b(dự đoán|dự báo|ngày mai|tuần sau|sắp tới|tương lai)\b", q) or (re.search(r"\b(tháng sau)\b", q) and not is_comparative))
         is_ambiguous_time = bool(re.search(r"\bbữa giờ\b", q))
-        is_subjective = bool(re.search(r"\b(có khá không|khá không|ổn không|tốt không|được không)\b", q))
+        is_subjective = bool(re.search(r"\b(có khá không|khá không|ổn không|tốt không|kinh doanh.*được không|tình hình.*được không)\b", q))
 
         # Check for unaccented phrases
         for pattern, replacement in cls.UNACCENTED_PHRASES:
@@ -277,8 +293,10 @@ class VietnameseNLP:
             q = re.sub(pattern, replacement, q)
 
         # Step 4: Semantic intent classifications
+        # Note: Do NOT match 'roi' in lowercase because in unaccented Vietnamese 'roi' is 'rồi'!
         is_profit_cost_query = bool(
-            re.search(r"\b(lợi nhuận|lãi ròng|lãi|giá vốn|chi phí|chi phí nhập|roi)\b", q)
+            re.search(r"\b(lợi nhuận|lãi ròng|lãi|giá vốn|chi phí|chi phí nhập|giá nhập|giá nhập bình quân|tỷ suất lợi nhuận|giá mua)\b", q)
+            or bool(re.search(r"\bROI\b", raw))
         )
         is_expiration_query = bool(
             re.search(r"\b(hết hạn|sắp hết hạn|hết date|hạn sử dụng|hsd)\b", q)
@@ -303,9 +321,9 @@ class VietnameseNLP:
             re.search(r"\b(chưa bán được|chưa bán ra|không bán được)\b", q)
         )
 
-        is_not_canceled = bool(re.search(r"\b(không bị hủy|không hủy|chưa bị hủy|chưa hủy)\b", q))
+        is_not_canceled = bool(re.search(r"\b(không bị hủy|không hủy|chưa bị hủy|chưa hủy|ko bi huy|khong bi huy|ko huy|chua bi huy)\b", q))
         is_cancellation_query = bool(
-            re.search(r"\b(hủy|cancel|tỷ lệ hủy|đơn hủy|bị hủy)\b", q)
+            re.search(r"\b(hủy|huỷ|huy|cancel|tỷ lệ hủy|tỉ lệ hủy|tỷ lệ huỷ|tỉ lệ huỷ|ti le huy|ty le huy|đơn hủy|đơn huỷ|don huy|bị hủy|bị huỷ|bi huy)\b", q)
         ) and not is_not_canceled
 
         # Debt sub-types
@@ -368,33 +386,46 @@ class VietnameseNLP:
             re.search(r"\b(doanh thu thấp nhất|thu về ít tiền nhất|nguồn thu kém nhất|doanh số thấp nhất)\b", q)
         )
 
+        is_customer_count_query = bool(
+            re.search(r"\b(có mấy người|bao nhiêu người|mấy người|mấy khách|bao nhiêu khách|số khách|bnhiu người|bn người|mấy ngừi|bao nhiêu ngừi)\b", q)
+        )
+
         is_quantity_ranking = bool(
             re.search(r"\b(bán chạy nhất|bán nhiều nhất|tiêu thụ nhiều nhất|tiêu thụ lớn nhất|bán tốt nhất|bán được nhiều nhất|bán dc nhiều nhất|chạy nhất)\b", q)
             or (re.search(r"\b(số lượng bán|số lượng tiêu thụ|số lượng)\b", q) and re.search(r"\b(lớn nhất|cao nhất|nhiều nhất)\b", q))
-            or (re.search(r"\b(mặt hàng|sản phẩm|thuốc|món|hàng|sp)\b", q) and re.search(r"\b(nhiều nhất|chạy nhất|ít nhất|ít người mua|nhiều người mua|ưa chuộng nhất)\b", q) and not is_revenue_ranking)
-        ) and not is_revenue_ranking
+            or (re.search(r"\b(mặt hàng|sản phẩm|thuốc|món|hàng|sp)\b", q) and re.search(r"\b(nhiều nhất|chạy nhất|ít người mua|nhiều người mua|ưa chuộng nhất)\b", q) and not is_revenue_ranking)
+        ) and not is_revenue_ranking and not is_customer_count_query
 
-        is_lowest_ranking = bool(
-            re.search(r"\b(bán ế nhất|bán ít nhất|bán chậm nhất|lượng bán thấp nhất|lượng bán nhỏ nhất|tiêu thụ ít nhất|số lượng bán nhỏ nhất|ít người mua|ít khách mua|ít ai mua|ít người mua nhất|ít khách mua nhất|mua ít nhất|người mua ít nhất|khách mua ít nhất|ít được mua nhất)\b", q)
-            or (re.search(r"\b(sản phẩm|mặt hàng|thuốc|món|hàng|sp)\b", q) and re.search(r"\b(ít|kém|thấp|ế)\b", q) and re.search(r"\b(nhất|nhứt|mua|bán)\b", q))
-        ) or is_revenue_lowest
+        is_lowest_ranking = (
+            bool(
+                re.search(r"\b(bán (?:được |dc )?(?:ế|ít|chậm) nhất|bán ế nhất|bán ít nhất|bán chậm nhất|lượng bán thấp nhất|lượng bán nhỏ nhất|tiêu thụ ít nhất|số lượng bán nhỏ nhất|ít người mua nhất|ít khách mua nhất|mua ít nhất|người mua ít nhất|khách mua ít nhất|ít được mua nhất)\b", q)
+                or (re.search(r"\b(sản phẩm|mặt hàng|thuốc|món|hàng|sp)\b", q) and re.search(r"\b(kém nhất|thấp nhất|ế nhất|ít nhất)\b", q))
+            ) or is_revenue_lowest
+        ) and not is_customer_count_query
 
         # Check "bán được bao nhiêu"
         has_unit_word = bool(re.search(r"\b(cái|hộp|vỉ|ly|chai|bịch|gói|sản phẩm|sp|món|chiếc|máy|đơn|lon|bộ|đôi|cuộn|thùng|cây)\b", q))
         is_ban_duoc_bao_nhieu = bool(re.search(r"\b(bán được bao nhiêu|bán được nhiêu|bán dc bn|bán dc bao nhiêu|bán ra bao nhiêu|bán ra dc bao nhiêu|bán ra bnhiu)\b", q))
         is_asking_money = bool(re.search(r"\b(tiền|doanh thu|doanh số|thu được)\b", q))
 
-        is_revenue_query = bool(
-            re.search(r"\b(doanh thu|doanh số|bao nhiêu tiền|nhiêu tiền|tổng tiền|tổng số tiền|thu được bao nhiêu tiền|trị giá bao nhiêu)\b", q)
-            or (is_ban_duoc_bao_nhieu and not has_unit_word and (is_asking_money or bool(re.search(r"\b(bao nhiêu rồi|nhiêu rồi|bn rùi|bn ròi)\b", q))))
-        ) or is_revenue_ranking or is_revenue_lowest
+        is_growth_query = bool(
+            re.search(r"\b(tăng trưởng|thay đổi bao nhiêu %|tăng bao nhiêu %|giảm bao nhiêu %|bao nhiêu %\b.*(?:so với|so th|so voi)|so với.*(?:bao nhiêu %|bnhiu %|bn %)|thay đổi.*%\b|tăng.*%\b|giảm.*%\b)\b", q)
+            or (re.search(r"\b(so với|so voi|so th)\b", q) and re.search(r"(?:%|phần trăm|phan tram)", q))
+        )
 
-        is_quantity_query = bool(
+        is_revenue_query = (
+            bool(
+                re.search(r"\b(doanh thu|doanh số|bao nhiêu tiền|nhiêu tiền|tổng tiền|tổng số tiền|thu được bao nhiêu tiền|thu về bao nhiêu|thu về bn|thu về nhiêu|trị giá bao nhiêu|bán được tổng cộng bao nhiêu tiền)\b", q)
+                or (is_ban_duoc_bao_nhieu and not has_unit_word and (is_asking_money or bool(re.search(r"\b(bao nhiêu rồi|nhiêu rồi|bn rùi|bn ròi)\b", q))))
+            ) or is_revenue_ranking or is_revenue_lowest
+        ) and not is_growth_query
+
+        is_quantity_query = (bool(
             re.search(r"\b(tổng số lượng|số lượng bán|tổng sản lượng|sản lượng|bao nhiêu cái|bao nhiêu ly|bao nhiêu hộp|bao nhiêu vỉ|bao nhiêu món|bao nhiêu sản phẩm|bao nhiêu chiếc|bao nhiêu máy|số lượng.*bán|bán ra.*số lượng)\b", q)
             or re.search(r"\b(có\s+)?(bao nhiêu|mấy)\s+(?:máy|máy mới|máy cũ|chiếc|cái|ly|hộp|vỉ|món|sản phẩm|đơn|chai|lon|bịch|gói|bộ|đôi|cuộn|thùng|cây)\b", q)
             or re.search(r"\b(?:bán|báng|tiêu thụ)\s+(?:ra\s+|được\s+|đượt\s+)?(?:bao nhiêu|bnhiu|mấy)\s*(?:máy|máy mới|máy cũ|chiếc|cái|ly|hộp|vỉ|món|sản phẩm|chai|lon|bịch|gói|bộ|đôi|cuộn|thùng|cây)?\b", q)
             or (is_ban_duoc_bao_nhieu and (has_unit_word or not (is_asking_money or bool(re.search(r"\b(bao nhiêu rồi|nhiêu rồi|bn rùi|bn rồi)\b", q)))))
-        ) or is_quantity_ranking or (is_lowest_ranking and not is_revenue_lowest)
+        ) or is_quantity_ranking or (is_lowest_ranking and not is_revenue_lowest)) and not is_profit_cost_query
 
         # Category and custom metric filters
         category_filter = None
@@ -419,28 +450,45 @@ class VietnameseNLP:
 
         # Edge checks
         is_zero_value_query = bool(re.search(r"\b(bằng 0|bằng 0 đồng|0 đồng)\b", q))
-        is_negative_value_query = bool(re.search(r"\b(tiền âm|số tiền âm|âm)\b", q))
+        is_negative_value_query = bool(re.search(r"\b(tiền âm|số tiền âm|giá trị âm|âm tiền)\b", q) or (re.search(r"\bâm\b", q) and not re.search(r"\b(âm lịch|am lich)\b", q)))
         is_success_rate_query = bool(re.search(r"\b(thành công)\b", q) and re.search(r"\b(tỷ lệ|phần trăm)\b", q))
         is_canceled_revenue_query = bool(re.search(r"\b(tổng tiền.*bị hủy|tiền bán.*bị hủy|doanh thu.*bị hủy)\b", q))
         is_special_char_query = bool(re.search(r"\b(ký tự đặc biệt)\b", q))
 
         # Extract specific entities if mentioned
         has_specific_product = None
-        for p_kw in [
-            "panadol", "berberin", "khẩu trang", "máy đo huyết áp", "sp_a", "sp_b", "sp_c",
-            "xiaomi redmi note 14", "xiaomi redmi 14c", "redmi note 14", "redmi note 12",
-            "samsung galaxy a56", "galaxy a56", "iphone 16 pro max", "iphone 15", "iphone 11",
-            "cốc sạc nhanh 20w", "kệ điện thoại", "thẻ nhớ microsd", "thẻ nhớ 64g",
-            "tiger lon", "tiger", "heineken", "xi măng hà tiên", "xi măng insee",
-            "costar omega 3", "gạch ống", "cà phê sữa", "trà đào cam sả", "cà phê đen"
-        ]:
-            if p_kw in q:
-                has_specific_product = p_kw
-                break
+        if catalog_products:
+            for p_cand in sorted(catalog_products, key=len, reverse=True):
+                p_cand_clean = p_cand.strip()
+                if len(p_cand_clean) >= 2:
+                    pattern = r"(?<!\w)" + re.escape(p_cand_clean.lower()) + r"(?!\w)"
+                    if re.search(pattern, q):
+                        has_specific_product = p_cand_clean
+                        break
+
+        if not has_specific_product:
+            for p_kw in [
+                "panadol", "berberin", "khẩu trang", "máy đo huyết áp", "sp_a", "sp_b", "sp_c",
+                "xiaomi redmi note 14", "xiaomi redmi 14c", "redmi note 14", "redmi note 12",
+                "samsung galaxy a56", "galaxy a56", "iphone 16 pro max", "iphone 15", "iphone 11",
+                "cốc sạc nhanh 20w", "kệ điện thoại", "thẻ nhớ microsd", "thẻ nhớ 64g",
+                "tiger lon", "tiger", "heineken", "xi măng hà tiên", "xi măng insee",
+                "costar omega 3", "gạch ống", "cà phê sữa", "trà đào cam sả", "cà phê đen"
+            ]:
+                if p_kw in q:
+                    has_specific_product = p_kw
+                    break
 
         # Date & Month selection queries (AnswerType.DATE)
         is_which_day_query = bool(re.search(r"\b(ngày nào|ngay nao|hạn dùng ngày nào|hạn sử dụng ngày nào|vào ngày nào)\b", q))
-        is_which_month_query = bool(re.search(r"\b(tháng nào|thang nao|vào tháng nào|trong tháng nào)\b", q)) and not is_which_day_query
+        is_which_month_query = bool(re.search(r"\b(tháng nào|thang nao|vào tháng nào|trong tháng nào|tháng mô|thang mo)\b", q)) and not is_which_day_query
+        if is_which_day_query or is_which_month_query:
+            is_revenue_ranking = False
+            is_quantity_ranking = False
+            is_lowest_ranking = False
+
+        from datamate.temporal.resolver import TemporalResolver
+        candidate_months = TemporalResolver.extract_candidate_months(q)
 
         # Consecutive Growth boolean query (e.g. Doanh thu 3 tháng có tăng liên tục không?)
         is_consecutive_growth_query = bool(
@@ -455,20 +503,49 @@ class VietnameseNLP:
         # Table query (e.g. Bảng khách nợ kèm số tiền còn nợ)
         is_table_query = bool(re.search(r"\b(bảng|kèm số tiền|kèm số nợ|mỗi người còn nợ bao nhiêu|mỗi người.*nợ bao nhiêu|mỗi người.*bao nhiêu)\b", q))
 
-        if is_quantity_ranking or is_revenue_ranking or is_lowest_ranking or is_which_day_query or is_which_month_query:
+        if is_quantity_ranking or is_revenue_ranking or is_lowest_ranking or is_which_day_query or is_which_month_query or is_unsold_query:
             has_specific_product = None
         elif not has_specific_product:
-            # Check for products in quotes
+            # 1. Check for specific known brands or quoted strings
             quote_m = re.search(r"['\"]([^'\"]{3,40})['\"]", raw)
+            brand_m = re.search(r"\b(iPhone\s+[\w\s\-\+]+|Samsung\s+[\w\s\-\+]+|Xiaomi\s+[\w\s\-\+]+|Redmi\s+[\w\s\-\+]+|OPPO\s+[\w\s\-\+]+|vivo\s+[\w\s\-\+]+|Tiger\s+[\w\s]+|Heineken\s+[\w\s]+|Xi măng\s+[\w\s\-]+|Ống\s+PVC\s+[\w\s\-\+]+|Nước\s+ép\s+[\w\s\-\(\)]+|Dầu\s+ăn\s+[\w\s]+|Mì\s+[\w\s]+|Gạch\s+[\w\s]+|Bột\s+giặt\s+[\w\s]+|Otrivin\s+[\w\s\-\,\%]+|Panadol\s+[\w\s]+|Paracetamol\s+[\w\s]+|Bisolvon\s+[\w\s]+|Enterogermina\s+[\w\s]+|Urgo\s+[\w\s]+|Povidine\s+[\w\s]+|Metformin\s+[\w\s]+)\b", raw, re.IGNORECASE)
+
             if quote_m:
                 has_specific_product = quote_m.group(1).strip()
+            elif brand_m:
+                has_specific_product = brand_m.group(1).strip()
             else:
-                # Check for explicit brand & model patterns (e.g. iPhone 16, Samsung A56, Xiaomi Note 14)
-                brand_m = re.search(r"\b(iPhone\s+[\w\s\-\+]+|Samsung\s+[\w\s\-\+]+|Xiaomi\s+[\w\s\-\+]+|Redmi\s+[\w\s\-\+]+|OPPO\s+[\w\s\-\+]+|vivo\s+[\w\s\-\+]+|Tiger\s+[\w\s]+|Heineken\s+[\w\s]+|Xi măng\s+[\w\s\-]+)\b", raw, re.IGNORECASE)
-                if brand_m:
-                    cand = brand_m.group(1).strip()
-                    if len(cand) >= 4 and not any(k in cand.lower() for k in ["bao nhieu", "bnhiu", "duoc", "khong"]):
-                        has_specific_product = cand
+                p_m1 = re.search(r"(?:bán ra bao nhiêu|bán được bao nhiêu|bán dc bao nhiêu|bán ra mấy|bán được mấy)\s+(?:cây|ly|chai|lon|vỉ|hộp|gói|bịch|chiếc|cái|thùng)\s+([^?]+?)(?:\s+trong|\s+vào|\s+tháng|\s+ngày|\s+tuần|\?|$)", raw, re.IGNORECASE)
+                p_m2 = re.search(r"(?:số\s+)?(?:cây|ly|chai|lon|vỉ|hộp|gói|bịch|chiếc|cái)\s+([^?]+?)\s+(?:bán được|bán ra|tiêu thụ|thu về|nhập vào)", raw, re.IGNORECASE)
+                p_m3 = re.search(r"(?:doanh thu của|dthu của)\s+([^?]+?)(?:\s+trong|\s+vào|\s+tháng|\s+ngày|\s+tuần|\?|$)", raw, re.IGNORECASE)
+                p_m4 = re.search(r"(?<!\bđơn\s)(?<!\bdon\s)(?<!\bkhách\s)(?<!\bkhach\s)(?<!\bcửa\s)(?<!\bcua\s)(?<!\bmua\s)(?<!\bbán\s)(?<!\bnhập\s)\b(?:mặt hàng|mat hang|sản phẩm|san pham|món|mon|thuốc|thuoc|hàng|hang|sp)\b\s+([A-Za-z0-9\u00C0-\u024F\u1EA0-\u1EF9][\w\s\-\+\(\)\/\,\.]{1,40}?)\s+(?:thu về|thu ve|bán được|ban duoc|bán ra|ban ra|bán dc|ban dc|còn|được bán|đem lại|đạt|trong|vào|tháng|ngày|\?|$)", raw, re.IGNORECASE)
+                p_m5 = re.search(r"(?:doanh thu|tiền bán|doanh số|dthu)(?:\s+của|\s+từ|\s+mặt hàng|\s+mat hang|\s+sản phẩm|\s+san pham|\s+món|\s+mon|\s+thuốc|\s+thuoc)?\s+([A-Za-z0-9\u00C0-\u024F\u1EA0-\u1EF9][\w\s\-\+\(\)\/\,\.]{1,40}?)\s+(?:trong|vào|tháng|ngày|năm|được|đạt|là|\?|$)", raw, re.IGNORECASE)
+                p_m6 = re.search(r"(?:giá bán|giá|bán)\s+(?:một|1)?\s*(?:gói|chai|hộp|vỉ|ly|cái|lon|kg|bịch|tuýp|ống|viên)?\s+([A-Za-z0-9\u00C0-\u024F\u1EA0-\u1EF9][\w\s\-\+\(\)\/\,\.]{1,40}?)\s+(?:vào|trong|ngày|tháng|năm|giá|bao nhiêu|là|\?|$)", raw, re.IGNORECASE)
+                p_m7 = re.search(r"(?:tồn kho|ton kho|kho còn|trong kho còn)\s+([A-Za-z0-9\u00C0-\u024F\u1EA0-\u1EF9][\w\s\-\+\(\)\/\,\.]{1,40}?)\s+(?:cuối|hôm nay|lúc|hết|là|\?|$)", raw, re.IGNORECASE)
+
+                TEMPORAL_AND_STOP_KEYWORDS = (
+                    "đầu", "hôm", "nay", "qua", "rồi", "roi", "khi", "tết", "tet", "trước", "truoc",
+                    "sau", "tất cả", "tat ca", "toàn bộ", "toan bo", "tổng cộng", "tong cong",
+                    "mọi", "moi", "đơn", "don", "khách", "khach",
+                    "nhân viên", "nhan vien", "ca sáng", "ca sang", "ca chiều", "ca chieu",
+                    "cùng kỳ", "cung ky", "năm ngoái", "nam ngoai", "năm trước", "nam truoc",
+                    "năm nay", "nam nay", "năm", "nam", "tháng", "thang", "tuần", "tuan",
+                    "ngày", "ngay", "quý", "quy", "dịp", "dip", "đợt", "dot",
+                )
+                GENERIC_NOUN_PREFIXES = (
+                    "mặt hàng", "mat hang", "sản phẩm", "san pham", "món", "mon", "hàng", "hang", "sp"
+                )
+
+                for cand_m in (p_m1, p_m2, p_m3, p_m4, p_m5, p_m6, p_m7):
+                    if cand_m:
+                        cand = cand_m.group(1).strip()
+                        cand = re.sub(r"\s+(?:trong|vào|tháng|ngày|tuần|năm|nhỉ|nhé|ạ|nha|vậy|shop).*$", "", cand, flags=re.IGNORECASE).strip()
+                        cand_stripped = re.sub(r"^(?:mặt hàng|mat hang|sản phẩm|san pham|món|mon|hàng|hang|sp)\s+", "", cand, flags=re.IGNORECASE).strip()
+                        cand_low = cand_stripped.lower()
+                        if len(cand_stripped) >= 3 and not any(cand_low == kw or cand_low.startswith(kw + " ") for kw in TEMPORAL_AND_STOP_KEYWORDS):
+                            if cand_low not in GENERIC_NOUN_PREFIXES and not any(k in cand_low for k in ["bao nhieu", "bnhiu", "duoc", "khong", "cua hang", "tiem", "quan"]):
+                                has_specific_product = cand_stripped
+                                break
 
         order_match = re.search(r"\b(hd\d+|dh\d+|ord\d+)\b", q)
         has_specific_order = order_match.group(1).upper() if order_match else None
@@ -565,6 +642,9 @@ class VietnameseNLP:
             is_consecutive_growth_query=is_consecutive_growth_query,
             is_cancellation_rate_query=is_cancellation_rate_query,
             is_table_query=is_table_query,
+            is_growth_query=is_growth_query,
+            is_customer_count_query=is_customer_count_query,
             category_filter=category_filter,
             metric_target=metric_target,
+            candidate_months=candidate_months,
         )

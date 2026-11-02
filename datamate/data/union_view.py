@@ -94,12 +94,34 @@ def _product_columns(info: TableInfo) -> Tuple[Optional[str], Optional[str]]:
     return name_column, code_column
 
 
+def _pick_date_column(info: TableInfo) -> Optional[str]:
+    """Chọn cột ngày tốt nhất khi bảng có nhiều cột role 'date'."""
+    date_cols = [c for c in info.columns if c.semantic_role == "date"]
+    if not date_cols:
+        return None
+    if len(date_cols) == 1:
+        return date_cols[0].name
+    # Ưu tiên cột có mẫu giá trị thực sự chứa YYYY-MM-DD
+    for c in date_cols:
+        for s in c.sample_values:
+            if isinstance(s, str) and len(s) >= 10 and s[4] == "-" and s[7] == "-":
+                return c.name
+    # Ưu tiên tên chứa 'ngay' hơn 'gio'
+    for c in date_cols:
+        if "ngay" in c.name.lower():
+            return c.name
+    return date_cols[0].name
+
+
 def _role_columns(info: TableInfo) -> Dict[str, str]:
     mapping: Dict[str, str] = {}
     for column in info.columns:
         role = column.semantic_role
         if role and role in CANON_ROLES and role not in mapping:
             mapping[role] = column.name
+    date_col = _pick_date_column(info)
+    if date_col:
+        mapping["date"] = date_col
     name, code = _product_columns(info)
     if name:
         mapping["product"] = name
@@ -137,7 +159,7 @@ def _expr(column: Optional[str], alias: str, cast: str = "TEXT") -> str:
 
 def _select_for_table(table: str, mapping: Dict[str, str]) -> str:
     return (
-        f"SELECT {_expr(mapping.get('date'), 'ngay')}, "
+        f"SELECT DISTINCT {_expr(mapping.get('date'), 'ngay')}, "
         f"{_expr(mapping.get('product'), 'ten_san_pham')}, "
         f"{_expr(mapping.get('product_code'), 'ma_san_pham')}, "
         f"{_expr(mapping.get('quantity'), 'so_luong', 'REAL')}, "
@@ -174,8 +196,24 @@ def _ensure_indexes(conn: sqlite3.Connection, tables: Dict[str, TableInfo]) -> N
     conn.commit()
 
 
+def _materialize(conn: sqlite3.Connection, select_sql: str) -> None:
+    """Vật chất hoá union thành bảng thật + index (nhanh hơn quét view mỗi câu)."""
+    existing = conn.execute(
+        "SELECT type FROM sqlite_master WHERE name = ?", (UNIFIED_VIEW,)
+    ).fetchone()
+    if existing and existing[0] in ("table", "view"):
+        conn.execute(f"DROP {existing[0].upper()} `{UNIFIED_VIEW}`")
+    conn.execute(f"CREATE TABLE `{UNIFIED_VIEW}` AS {select_sql}")
+    for column in ("ngay", "ten_san_pham", "trang_thai", "ma_hoa_don"):
+        conn.execute(
+            f'CREATE INDEX IF NOT EXISTS "idx_unified_{column}" '
+            f'ON `{UNIFIED_VIEW}`(`{column}`)'
+        )
+    conn.commit()
+
+
 def build_sales_union(conn: sqlite3.Connection, tables: Dict[str, TableInfo]) -> Optional[str]:
-    """Tạo `_sales_unified` nếu gộp được nhiều bảng fact bán hàng.
+    """Tạo bảng `_sales_unified` nếu gộp được nhiều bảng fact bán hàng.
 
     Ưu tiên 2 kiểu dữ liệu phổ biến của DataMate:
     1. Nhiều bảng dòng hàng chia theo tháng/quý/năm (UNION ALL).
@@ -200,10 +238,8 @@ def build_sales_union(conn: sqlite3.Connection, tables: Dict[str, TableInfo]) ->
             best = members
 
     if best:
-        conn.execute(f"DROP VIEW IF EXISTS `{UNIFIED_VIEW}`")
         selects = [_select_for_table(name, mapping) for name, _, mapping in best]
-        conn.execute(f"CREATE VIEW `{UNIFIED_VIEW}` AS " + " UNION ALL ".join(selects))
-        conn.commit()
+        _materialize(conn, " UNION ALL ".join(selects))
         return UNIFIED_VIEW
 
     return _build_header_detail_union(conn, tables)
@@ -219,7 +255,7 @@ def _is_header_table(name: str, info: TableInfo) -> bool:
     if any(token in clean for token in ("chi_tiet", "chitiet", "nhap", "phieu_thu", "phieuthu", "giao")):
         return False
     roles = {c.semantic_role for c in info.columns if c.semantic_role}
-    return {"date", "order_id", "total_amount"} <= roles and "product" not in roles
+    return {"date", "order_id"} <= roles and "product" not in roles
 
 
 def _is_detail_table(name: str, info: TableInfo) -> bool:
@@ -229,7 +265,7 @@ def _is_detail_table(name: str, info: TableInfo) -> bool:
     if any(token in clean for token in ("lo", "nhap", "giao")):
         return False
     roles = {c.semantic_role for c in info.columns if c.semantic_role}
-    return {"order_id", "product"} <= roles and bool({"quantity", "total_amount"} & roles)
+    return {"order_id", "product"} <= roles and bool({"quantity", "total_amount", "unit_price"} & roles)
 
 
 def _header_mapping(info: TableInfo) -> Dict[str, str]:
@@ -298,7 +334,7 @@ def _build_header_detail_union(conn: sqlite3.Connection, tables: Dict[str, Table
     header_selects = []
     for name, _, mapping in headers:
         header_selects.append(
-            f"SELECT {_expr(mapping.get('order_id'), 'ma_hoa_don')}, "
+            f"SELECT DISTINCT {_expr(mapping.get('order_id'), 'ma_hoa_don')}, "
             f"{_expr(mapping.get('date'), 'ngay')}, "
             f"{_expr(mapping.get('status'), 'trang_thai')}, "
             f"{_expr(mapping.get('customer'), 'khach_hang')} FROM `{name}`"
@@ -306,7 +342,7 @@ def _build_header_detail_union(conn: sqlite3.Connection, tables: Dict[str, Table
     detail_selects = []
     for name, _, mapping in details:
         detail_selects.append(
-            f"SELECT {_expr(mapping.get('order_id'), 'ma_hoa_don')}, "
+            f"SELECT DISTINCT {_expr(mapping.get('order_id'), 'ma_hoa_don')}, "
             f"{_expr(mapping.get('product'), 'ten_san_pham')}, "
             f"{_expr(mapping.get('product_code'), 'ma_san_pham')}, "
             f"{_expr(mapping.get('quantity'), 'so_luong', 'REAL')}, "
@@ -315,20 +351,26 @@ def _build_header_detail_union(conn: sqlite3.Connection, tables: Dict[str, Table
             f"{_expr(mapping.get('discount'), 'giam_gia', 'REAL')} FROM `{name}`"
         )
 
-    sql = (
-        f"CREATE VIEW `{UNIFIED_VIEW}` AS "
-        f"SELECT h.ngay AS ngay, d.ten_san_pham AS ten_san_pham, "
-        f"d.ma_san_pham AS ma_san_pham, d.so_luong AS so_luong, "
-        f"d.thanh_tien AS thanh_tien, h.trang_thai AS trang_thai, "
-        f"h.khach_hang AS khach_hang, d.ma_hoa_don AS ma_hoa_don, "
-        f"d.don_gia AS don_gia, d.giam_gia AS giam_gia "
-        f"FROM ({' UNION ALL '.join(detail_selects)}) d "
-        f"JOIN ({' UNION ALL '.join(header_selects)}) h "
-        f"ON d.ma_hoa_don = h.ma_hoa_don"
+    conn.execute("DROP TABLE IF EXISTS _tmp_headers;")
+    conn.execute("DROP TABLE IF EXISTS _tmp_details;")
+    conn.execute(f"CREATE TEMP TABLE _tmp_headers AS {' UNION ALL '.join(header_selects)};")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tmp_h_mhd ON _tmp_headers(ma_hoa_don);")
+    conn.execute(f"CREATE TEMP TABLE _tmp_details AS {' UNION ALL '.join(detail_selects)};")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tmp_d_mhd ON _tmp_details(ma_hoa_don);")
+
+    select_sql = (
+        "SELECT h.ngay AS ngay, d.ten_san_pham AS ten_san_pham, "
+        "d.ma_san_pham AS ma_san_pham, d.so_luong AS so_luong, "
+        "d.thanh_tien AS thanh_tien, h.trang_thai AS trang_thai, "
+        "h.khach_hang AS khach_hang, d.ma_hoa_don AS ma_hoa_don, "
+        "d.don_gia AS don_gia, d.giam_gia AS giam_gia "
+        "FROM _tmp_details d "
+        "JOIN _tmp_headers h "
+        "ON d.ma_hoa_don = h.ma_hoa_don"
     )
-    conn.execute(f"DROP VIEW IF EXISTS `{UNIFIED_VIEW}`")
-    conn.execute(sql)
-    conn.commit()
+    _materialize(conn, select_sql)
+    conn.execute("DROP TABLE IF EXISTS _tmp_headers;")
+    conn.execute("DROP TABLE IF EXISTS _tmp_details;")
     return UNIFIED_VIEW
 
 

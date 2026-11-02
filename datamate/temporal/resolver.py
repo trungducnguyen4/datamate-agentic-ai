@@ -1,9 +1,9 @@
 from __future__ import annotations
 import calendar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 import re
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from datamate.data.calendar import get_festival_solar_date, get_lunar_range
 from datamate.data.calendar_csv import get_calendar
 
@@ -15,6 +15,7 @@ class DateRange:
     target_month: Optional[str] = None  # YYYY-MM if asking about a specific month
     is_exact_day: bool = False
     is_ambiguous: bool = False
+    candidate_months: List[str] = field(default_factory=list)
 
 
 class TemporalResolver:
@@ -29,7 +30,87 @@ class TemporalResolver:
 
     @staticmethod
     def parse_as_of_date(as_of_date_str: str) -> date:
-        return datetime.strptime(as_of_date_str.strip(), "%Y-%m-%d").date()
+        """Parse as_of_date defensively from multiple date formats (ISO, VN DD/MM/YYYY, etc.)."""
+        if not as_of_date_str:
+            return date(2026, 3, 4)
+        s = str(as_of_date_str).strip()
+        # 1. Standard ISO YYYY-MM-DD or YYYY/MM/DD
+        m_iso = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", s)
+        if m_iso:
+            return date(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)))
+        # 2. Vietnamese DD/MM/YYYY or DD-MM-YYYY
+        m_vn = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$", s)
+        if m_vn:
+            d, m, y = int(m_vn.group(1)), int(m_vn.group(2)), int(m_vn.group(3))
+            if m > 12 and d <= 12:  # Swap if MM/DD/YYYY
+                d, m = m, d
+            return date(y, m, d)
+        # 3. Fallback formats
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        return date(2026, 3, 4)
+
+    @classmethod
+    def normalize_as_of_date_str(cls, as_of_date_str: str) -> str:
+        d = cls.parse_as_of_date(as_of_date_str)
+        return d.isoformat()
+
+    @staticmethod
+    def extract_candidate_months(query: str) -> List[str]:
+        """Extract multi-month tokens or ranges from a Vietnamese query (e.g. 3/25, 4/25, 5/25 -> ['2025-03', '2025-04', '2025-05'])."""
+        q_norm = query.lower()
+        months = set()
+        # Pattern 1: M/YYYY or M/YY (e.g. 3/25, 4/25, 11/2025)
+        for m in re.finditer(r"(?:tháng\s*|th\s*|t\s*)?(\d{1,2})/(\d{2,4})", q_norm):
+            month = int(m.group(1))
+            year = int(m.group(2))
+            if year < 100:
+                year += 2000
+            if 1 <= month <= 12:
+                months.add(f"{year:04d}-{month:02d}")
+        # Pattern 2: Series like th2, th3, th4/2026 or tháng 1, 2, 3/2026
+        m_series = re.search(r"(?:th|t|tháng\s*)(\d{1,2})\s*,\s*(?:th|t|tháng\s*)?(\d{1,2})\s*(?:và|,|hay)?\s*(?:th|t|tháng\s*)?(\d{1,2})[/-](\d{2,4})", q_norm)
+        if m_series:
+            y = int(m_series.group(4))
+            if y < 100:
+                y += 2000
+            for g in range(1, 4):
+                months.add(f"{y:04d}-{int(m_series.group(g)):02d}")
+        # Pattern 3: Explicit 'tháng X năm Y'
+        for m in re.finditer(r"tháng\s*(\d{1,2})\s*năm\s*(\d{4})", q_norm):
+            months.add(f"{int(m.group(2)):04d}-{int(m.group(1)):02d}")
+        # Pattern 4: Ranges like 'từ th12/2025 đến th2/2026' or 'từ tháng 8/2025 tới tháng 10/2025'
+        m_range = re.search(r"(?:từ|tu)\s*(?:tháng\s*|th\s*|t\s*)?(\d{1,2})[/-](\d{2,4})\s*(?:tới|đến|toi|den)\s*(?:tháng\s*|th\s*|t\s*)?(\d{1,2})[/-](\d{2,4})", q_norm)
+        if m_range:
+            m1, y1 = int(m_range.group(1)), int(m_range.group(2))
+            m2, y2 = int(m_range.group(3)), int(m_range.group(4))
+            if y1 < 100:
+                y1 += 2000
+            if y2 < 100:
+                y2 += 2000
+            cy, cm = y1, m1
+            while (cy < y2) or (cy == y2 and cm <= m2):
+                months.add(f"{cy:04d}-{cm:02d}")
+                cm += 1
+                if cm > 12:
+                    cm = 1
+                    cy += 1
+        # If 2 months and range connector
+        if len(months) == 2 and any(k in q_norm for k in ["tới", "đến", "toi", "den"]):
+            m_list = sorted(list(months))
+            y1, m1 = map(int, m_list[0].split("-"))
+            y2, m2 = map(int, m_list[1].split("-"))
+            cy, cm = y1, m1
+            while (cy < y2) or (cy == y2 and cm <= m2):
+                months.add(f"{cy:04d}-{cm:02d}")
+                cm += 1
+                if cm > 12:
+                    cm = 1
+                    cy += 1
+        return sorted(list(months))
 
     @staticmethod
     def _tet_year(query: str, default_year: int) -> int:
@@ -150,14 +231,45 @@ class TemporalResolver:
             end_str = yesterday.strftime("%Y-%m-%d")
             return DateRange(start_date=start_str, end_date=end_str)
 
-        # 3. Dynamic rolling "7 ngày gần đây", "7 ngày qua", "bảy ngày gần đây"
-        # Window: [anchor - 6 days, anchor] (Total exactly 7 days including as_of_date)
-        if any(w in q for w in ["7 ngày gần đây", "7 ngày qua", "bảy ngày gần đây", "bảy ngày qua", "7 ngay gan day", "7 ngay qua"]):
-            start_d = anchor - timedelta(days=6)
-            return DateRange(
-                start_date=start_d.strftime("%Y-%m-%d"),
-                end_date=anchor.strftime("%Y-%m-%d"),
-            )
+        # 3. Dynamic rolling "N ngày gần nhất", "N ngày gần đây", "N ngày qua"
+        # Rulebook §2 line 28: "N ngày gần nhất: N ngày liền nhau kể cả hôm nay, ngày cuối là hôm nay"
+        word_to_num = {
+            "một": 1, "mot": 1, "hai": 2, "ba": 3, "bốn": 4, "bon": 4,
+            "năm": 5, "nam": 5, "sáu": 6, "sau": 6, "bảy": 7, "bay": 7,
+            "tám": 8, "tam": 8, "chín": 9, "chin": 9, "mười": 10, "muoi": 10,
+        }
+        n_days_match = re.search(
+            r"\b(\d+|một|mot|hai|ba|bốn|bon|năm|nam|sáu|sau|bảy|bay|tám|tam|chín|chin|mười|muoi)\s*(?:ngày|ngay)\s*(?:gần nhất|gan nhat|gần đây|gan day|qua|vừa qua|vua qua)\b",
+            q,
+        )
+        if n_days_match:
+            raw_n = n_days_match.group(1).lower()
+            n = word_to_num.get(raw_n) or int(raw_n)
+            if n > 0:
+                start_d = anchor - timedelta(days=n - 1)
+                return DateRange(
+                    start_date=start_d.strftime("%Y-%m-%d"),
+                    end_date=anchor.strftime("%Y-%m-%d"),
+                )
+
+        # 3b. Dynamic rolling "N tháng gần đây", "ba tháng gần đây", "3 tháng gần đây"
+        n_months_match = re.search(
+            r"\b(\d+|một|mot|hai|ba|bốn|bon|năm|nam|sáu|sau|bảy|bay|tám|tam|chín|chin|mười|muoi)\s*(?:tháng|thang)\s*(?:gần nhất|gan nhat|gần đây|gan day|qua|vừa qua|vua qua)\b",
+            q,
+        )
+        if n_months_match:
+            raw_n = n_months_match.group(1).lower()
+            n = word_to_num.get(raw_n) or int(raw_n)
+            if n > 0:
+                cur_y = year
+                cur_m = month - (n - 1)
+                while cur_m <= 0:
+                    cur_m += 12
+                    cur_y -= 1
+                return DateRange(
+                    start_date=f"{cur_y:04d}-{cur_m:02d}-01",
+                    end_date=anchor.strftime("%Y-%m-%d"),
+                )
 
         # 4. "Cùng kỳ năm ngoái", "cùng kỳ năm trước"
         if any(w in q for w in ["cùng kỳ năm ngoái", "cùng kỳ năm trước", "cung ky nam ngoai", "cung ky nam truoc"]):
@@ -173,6 +285,38 @@ class TemporalResolver:
         if re.search(r"\bth[aá]ng\s*(1[3-9]|[2-9]\d)\b", q):
             return DateRange(start_date="9999-12-31", end_date="9999-12-31")
 
+        # 5b. Date Range expressions:
+        # e.g., "từ ngày 1/1 đến hết hôm nay", "tính từ ngày 1/1 đến hôm nay", "từ 01/01 đến nay", "từ ngày 1/1 đến nay"
+        range_to_today_match = re.search(
+            r"(?:từ|tu|tinh tu|tính từ)?\s*(?:ngày|ngay)?\s*(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?\s*(?:đến|tới|den|toi)\s*(?:hết\s+|het\s+)?(?:hôm nay|hom nay|hnay|nay|bữa nay|bua nay)",
+            q
+        )
+        if range_to_today_match:
+            d_day = int(range_to_today_match.group(1))
+            d_mon = int(range_to_today_match.group(2))
+            d_yr = int(range_to_today_match.group(3)) if range_to_today_match.group(3) else year
+            return DateRange(
+                start_date=f"{d_yr:04d}-{d_mon:02d}-{d_day:02d}",
+                end_date=anchor.strftime("%Y-%m-%d"),
+            )
+
+        # e.g., "từ ngày 01/01/2026 đến ngày 15/01/2026", "từ 01/01 đến 15/01", "ngày 01/01 đến 15/01"
+        range_between_dates_match = re.search(
+            r"(?:từ|tinh tu|tính từ)?\s*(?:ngày|ngay)?\s*(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?\s*(?:đến|tới|den|toi)\s*(?:ngày|ngay)?\s*(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?",
+            q
+        )
+        if range_between_dates_match:
+            d1_day = int(range_between_dates_match.group(1))
+            d1_mon = int(range_between_dates_match.group(2))
+            d1_yr = int(range_between_dates_match.group(3)) if range_between_dates_match.group(3) else year
+            d2_day = int(range_between_dates_match.group(4))
+            d2_mon = int(range_between_dates_match.group(5))
+            d2_yr = int(range_between_dates_match.group(6)) if range_between_dates_match.group(6) else (d1_yr or year)
+            return DateRange(
+                start_date=f"{d1_yr:04d}-{d1_mon:02d}-{d1_day:02d}",
+                end_date=f"{d2_yr:04d}-{d2_mon:02d}-{d2_day:02d}",
+            )
+
         # 6. Explicit specific date DD/MM or DD/MM/YYYY
         # e.g., "ngày 03/04/2026", "ngày 04/03", "ngay 04/03", "03-04-2026"
         date_explicit_match = re.search(r"(?:ngày|ngay)\s*(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?", q)
@@ -184,6 +328,50 @@ class TemporalResolver:
                 start_date=f"{d_yr:04d}-{d_mon:02d}-{d_day:02d}",
                 end_date=f"{d_yr:04d}-{d_mon:02d}-{d_day:02d}",
                 is_exact_day=True,
+            )
+
+        # 6a. Quarter: "Quý 1", "quý 2", "q1", "q2", "quy 4/2025", "quý 4 năm 2025", "quý 4 năm ngoái", "quý một"
+        quarter_match = re.search(r"(?:quý|quy|\bq)\s*([1-4]|i{1,3}|iv|một|mot|hai|ba|bốn|bon)(?:[\s/,-]*(?:năm|nam)?\s*(\d{4}))?\b", q)
+        if quarter_match:
+            raw_q = quarter_match.group(1).lower()
+            if quarter_match.group(2):
+                target_yr = int(quarter_match.group(2))
+            elif any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
+                target_yr = year - 1
+            else:
+                target_yr = year
+            roman_map = {
+                "1": 1, "i": 1, "một": 1, "mot": 1,
+                "2": 2, "ii": 2, "hai": 2,
+                "3": 3, "iii": 3, "ba": 3,
+                "4": 4, "iv": 4, "bốn": 4, "bon": 4,
+            }
+            q_num = roman_map.get(raw_q, 1)
+            start_m = (q_num - 1) * 3 + 1
+            end_m = q_num * 3
+            # Rule 34: Tháng M, quý Q không ghi năm: của năm nay nếu không sau hôm nay; sau hôm nay thì của năm trước.
+            if not quarter_match.group(2) and not any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
+                q_start_date = date(target_yr, start_m, 1)
+                if q_start_date > anchor:
+                    target_yr = year - 1
+            last_day = calendar.monthrange(target_yr, end_m)[1]
+            return DateRange(
+                start_date=f"{target_yr:04d}-{start_m:02d}-01",
+                end_date=f"{target_yr:04d}-{end_m:02d}-{last_day:02d}",
+            )
+
+        # 6b. Multi-month extraction or Short Month Formats (e.g. 3/25, 4/25, 5/25, th7/2025, 8/2025)
+        cand_months = cls.extract_candidate_months(q)
+        if len(cand_months) >= 2:
+            m_first = cand_months[0]
+            m_last = cand_months[-1]
+            y_first, m_f_num = map(int, m_first.split("-"))
+            y_last, m_l_num = map(int, m_last.split("-"))
+            last_day = calendar.monthrange(y_last, m_l_num)[1]
+            return DateRange(
+                start_date=f"{y_first:04d}-{m_f_num:02d}-01",
+                end_date=f"{y_last:04d}-{m_l_num:02d}-{last_day:02d}",
+                candidate_months=cand_months,
             )
 
         # 7. Specific YYYY-MM format in query (e.g., "tháng 3 năm 2026", "tháng 03/2026", "thang 4/2025")
@@ -199,29 +387,14 @@ class TemporalResolver:
                     target_month=f"{y:04d}-{m:02d}",
                 )
 
-        # 7b. Quarter: "Quý 1", "quý 2", "quý 3", "quý 4", "quy 4/2025", "quý 4 năm 2025", "quý 4 năm ngoái"
-        quarter_match = re.search(r"(?:quý|quy)\s*([1-4]|i{1,3}|iv)(?:[\s/,-]*(?:năm|nam)?\s*(\d{4}))?", q)
-        if quarter_match:
-            raw_q = quarter_match.group(1).lower()
-            if quarter_match.group(2):
-                target_yr = int(quarter_match.group(2))
-            elif any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
-                target_yr = year - 1
-            else:
-                target_yr = year
-            roman_map = {"1": 1, "i": 1, "2": 2, "ii": 2, "3": 3, "iii": 3, "4": 4, "iv": 4}
-            q_num = roman_map.get(raw_q, 1)
-            start_m = (q_num - 1) * 3 + 1
-            end_m = q_num * 3
-            # Rule 34: Tháng M, quý Q không ghi năm: của năm nay nếu không sau hôm nay; sau hôm nay thì của năm trước.
-            if not quarter_match.group(2) and not any(w in q for w in ["năm ngoái", "năm trước", "nam ngoai", "nam truoc"]):
-                q_start_date = date(target_yr, start_m, 1)
-                if q_start_date > anchor:
-                    target_yr = year - 1
-            last_day = calendar.monthrange(target_yr, end_m)[1]
+        if len(cand_months) == 1:
+            m_single = cand_months[0]
+            y_s, m_s = map(int, m_single.split("-"))
+            last_day = calendar.monthrange(y_s, m_s)[1]
             return DateRange(
-                start_date=f"{target_yr:04d}-{start_m:02d}-01",
-                end_date=f"{target_yr:04d}-{end_m:02d}-{last_day:02d}",
+                start_date=f"{y_s:04d}-{m_s:02d}-01",
+                end_date=f"{y_s:04d}-{m_s:02d}-{last_day:02d}",
+                target_month=f"{y_s:04d}-{m_s:02d}",
             )
 
         # 8. Year-to-date: "năm 2026 đến nay", "năm 2026 đến giờ"
@@ -259,32 +432,23 @@ class TemporalResolver:
                     target_month=f"{target_yr:04d}-{m:02d}",
                 )
 
-        # 9. "Hôm nay", "hôm qua", "hôm kia"
-        if any(w in q for w in ["hôm nay", "ngày này", "ngày ni", "hom nay", "ngay nay", "ngay ni"]):
-            d_str = anchor.strftime("%Y-%m-%d")
-            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
-        if any(w in q for w in ["hôm qua", "ngày qua", "hom qua", "ngay qua"]):
-            d_str = (anchor - timedelta(days=1)).strftime("%Y-%m-%d")
-            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
-        if any(w in q for w in ["hôm kia", "hom kia"]):
-            d_str = (anchor - timedelta(days=2)).strftime("%Y-%m-%d")
-            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
-
-        # 10. Calendar Week: "Tuần rồi", "tuần trước", "tuần qua"
-        if any(w in q for w in ["tuần rồi", "tuần trước", "tuần qua", "tuan roi", "tuan truoc"]):
-            current_monday = anchor - timedelta(days=anchor.weekday())
-            prev_monday = current_monday - timedelta(days=7)
-            prev_sunday = prev_monday + timedelta(days=6)
+        # 9. Calendar Year: "Năm ngoái", "năm trước", "năm vừa qua", "nam ngoai", "nam truoc"
+        if any(w in q for w in ["năm ngoái", "năm trước", "năm vừa qua", "nam ngoai", "nam truoc"]):
+            prev_year = year - 1
             return DateRange(
-                start_date=prev_monday.strftime("%Y-%m-%d"),
-                end_date=prev_sunday.strftime("%Y-%m-%d"),
+                start_date=f"{prev_year:04d}-01-01",
+                end_date=f"{prev_year:04d}-12-31",
             )
 
-        # "Tuần này", "tuần ni" (Rulebook Rule 31: Từ thứ Hai đến hết hôm nay)
-        if any(w in q for w in ["tuần này", "tuần ni", "tuan nay", "tuan ni"]):
-            current_monday = anchor - timedelta(days=anchor.weekday())
+        # 10. Year-to-date: "Năm nay", "năm ni", "từ đầu năm", "đầu năm tới nay", "đầu năm tới chừ"
+        # Rulebook: "từ đầu năm tới nay" = 01/01 → hết hôm nay (không phải 31/12)
+        if any(w in q for w in [
+            "năm nay", "năm ni", "nam nay", "nam ni",
+            "đầu năm", "dau nam", "từ đầu năm", "tu dau nam",
+            "đầu năm tới nay", "đầu năm đến nay", "đầu năm tới chừ", "đầu năm tới bây chừ"
+        ]):
             return DateRange(
-                start_date=current_monday.strftime("%Y-%m-%d"),
+                start_date=f"{year:04d}-01-01",
                 end_date=anchor.strftime("%Y-%m-%d"),
             )
 
@@ -303,27 +467,100 @@ class TemporalResolver:
                 target_month=f"{prev_year:04d}-{prev_month:02d}",
             )
 
-        # "Tháng này", "tháng ni" (Rulebook Rule 33: Từ ngày 1 đến hết hôm nay)
-        if any(w in q for w in ["tháng này", "tháng ni", "thang nay", "thang ni"]):
+        # Month-to-date: "Tháng này", "tháng ni", "từ đầu tháng" (Rulebook Rule 33: Từ ngày 1 đến hết hôm nay)
+        if any(w in q for w in ["tháng này", "tháng ni", "thang nay", "thang ni", "đầu tháng", "dau thang", "từ đầu tháng", "tu dau thang"]):
             return DateRange(
                 start_date=f"{year:04d}-{month:02d}-01",
                 end_date=anchor.strftime("%Y-%m-%d"),
                 target_month=f"{year:04d}-{month:02d}",
             )
 
-        # 12. Year: "Năm ngoái", "năm trước", "năm nay", "năm ni"
-        if any(w in q for w in ["năm ngoái", "năm trước", "năm vừa qua", "nam ngoai", "nam truoc"]):
-            prev_year = year - 1
+        # 12. Calendar Week: "Tuần rồi", "tuần trước", "tuần qua"
+        if any(w in q for w in ["tuần rồi", "tuần trước", "tuần qua", "tuan roi", "tuan truoc"]):
+            current_monday = anchor - timedelta(days=anchor.weekday())
+            prev_monday = current_monday - timedelta(days=7)
+            prev_sunday = prev_monday + timedelta(days=6)
             return DateRange(
-                start_date=f"{prev_year:04d}-01-01",
-                end_date=f"{prev_year:04d}-12-31",
+                start_date=prev_monday.strftime("%Y-%m-%d"),
+                end_date=prev_sunday.strftime("%Y-%m-%d"),
             )
 
-        if any(w in q for w in ["năm nay", "năm ni", "nam nay", "nam ni"]):
-            # Rulebook: "từ đầu năm tới nay" = 01/01 → hết hôm nay (không phải 31/12)
+        # Week-to-date: "Tuần này", "tuần ni" (Rulebook Rule 31: Từ thứ Hai đến hết hôm nay)
+        if any(w in q for w in ["tuần này", "tuần ni", "tuan nay", "tuan ni", "đầu tuần", "dau tuan", "từ đầu tuần", "tu dau tuan"]):
+            current_monday = anchor - timedelta(days=anchor.weekday())
             return DateRange(
-                start_date=f"{year:04d}-01-01",
+                start_date=current_monday.strftime("%Y-%m-%d"),
                 end_date=anchor.strftime("%Y-%m-%d"),
             )
+
+        # 13. Single day: "Hôm qua", "hôm kia", "hôm nay"
+        if re.search(r"(?<!\d)\s*\b(?:hôm qua|hom qua|ngày hôm qua|ngay hom qua|ngày qua|ngay qua|hqua|bữa qua|bua qua|hqa)\b", q):
+            d_str = (anchor - timedelta(days=1)).strftime("%Y-%m-%d")
+            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
+        if any(w in q for w in ["hôm kia", "hom kia", "hkia"]):
+            d_str = (anchor - timedelta(days=2)).strftime("%Y-%m-%d")
+            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
+        if any(w in q for w in ["hôm nay", "ngày này", "ngày ni", "hôm ni", "hom ni", "hom nay", "ngay nay", "ngay ni", "hnay", "bữa nay", "bua nay"]):
+            d_str = anchor.strftime("%Y-%m-%d")
+            return DateRange(start_date=d_str, end_date=d_str, is_exact_day=True)
+
+        return None
+
+    @classmethod
+    def resolve_comparison_periods(cls, query: str, as_of_date_str: str) -> Optional[Tuple[DateRange, DateRange]]:
+        """Resolve current and comparison baseline period according to Rulebook §1 Rule 19 & §2 Rule 32.
+
+        Example:
+        - "Tháng này so với tháng trước":
+          Period 1 (Current): 1st to as_of_date
+          Period 2 (Comparison): 1st of prev month to min(day of as_of_date, last day of prev month)
+        - "Tuần này so với tuần trước":
+          Period 1: Monday of this week to as_of_date
+          Period 2: Monday of last week to same day of last week
+        """
+        q = query.lower()
+        anchor = cls.parse_as_of_date(as_of_date_str)
+        year, month, day = anchor.year, anchor.month, anchor.day
+
+        # Compare month vs previous month
+        if any(w in q for w in ["tháng này", "tháng ni", "thang nay"]) and any(w in q for w in ["tháng trước", "tháng rồi", "cùng kỳ", "thang truoc", "thang roi"]):
+            cur_start = f"{year:04d}-{month:02d}-01"
+            cur_end = anchor.strftime("%Y-%m-%d")
+            cur_range = DateRange(start_date=cur_start, end_date=cur_end)
+
+            prev_y = year if month > 1 else year - 1
+            prev_m = month - 1 if month > 1 else 12
+            last_day_prev = calendar.monthrange(prev_y, prev_m)[1]
+            prev_day = min(day, last_day_prev)
+            prev_start = f"{prev_y:04d}-{prev_m:02d}-01"
+            prev_end = f"{prev_y:04d}-{prev_m:02d}-{prev_day:02d}"
+            prev_range = DateRange(start_date=prev_start, end_date=prev_end)
+            return cur_range, prev_range
+
+        # Specific month comparison: e.g. "tháng 2/2026 so cùng kỳ năm trước" or "03/2025 so với tháng liền trước"
+        m_match = re.search(r"(?:tháng|th|t)\s*(\d{1,2})(?:[\/\-\s]|(?:\s*năm\s*))(\d{2,4})", q)
+        if m_match:
+            tgt_m = int(m_match.group(1))
+            tgt_y = int(m_match.group(2))
+            if tgt_y < 100:
+                tgt_y += 2000
+            if 1 <= tgt_m <= 12 and 2000 <= tgt_y <= 2030:
+                last_d = calendar.monthrange(tgt_y, tgt_m)[1]
+                cur_range = DateRange(start_date=f"{tgt_y:04d}-{tgt_m:02d}-01", end_date=f"{tgt_y:04d}-{tgt_m:02d}-{last_d:02d}")
+
+                # Compare vs previous year (cùng kỳ năm ngoái / cùng kỳ năm trước / năm rồi)
+                if any(w in q for w in ["năm ngoái", "nam ngoai", "năm trước", "nam truoc", "năm rồi", "nam roi", "cùng tháng năm", "cung thang nam"]):
+                    prev_y = tgt_y - 1
+                    prev_last_d = calendar.monthrange(prev_y, tgt_m)[1]
+                    prev_range = DateRange(start_date=f"{prev_y:04d}-{tgt_m:02d}-01", end_date=f"{prev_y:04d}-{tgt_m:02d}-{prev_last_d:02d}")
+                    return cur_range, prev_range
+
+                # Compare vs previous month (tháng trước / tháng liền trước)
+                if any(w in q for w in ["tháng trước", "thang truoc", "tháng liền trước", "thang lien truoc", "tháng rồi", "thang roi"]):
+                    prev_y = tgt_y if tgt_m > 1 else tgt_y - 1
+                    prev_m = tgt_m - 1 if tgt_m > 1 else 12
+                    prev_last_d = calendar.monthrange(prev_y, prev_m)[1]
+                    prev_range = DateRange(start_date=f"{prev_y:04d}-{prev_m:02d}-01", end_date=f"{prev_y:04d}-{prev_m:02d}-{prev_last_d:02d}")
+                    return cur_range, prev_range
 
         return None

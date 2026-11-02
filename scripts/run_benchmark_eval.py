@@ -114,6 +114,7 @@ def run_benchmark():
     mismatches = []
 
     print(f"Running Benchmark Suite on {total} questions...")
+    all_preds = []
 
     for item in benchmarks:
         cat = item["category"]
@@ -127,6 +128,7 @@ def run_benchmark():
         )
 
         resp = agent.answer_question(q)
+        all_preds.append(resp)
         actual_type = resp.type.value if hasattr(resp.type, "value") else str(resp.type)
         actual_ans = resp.answer
 
@@ -168,17 +170,24 @@ def run_benchmark():
             "actual_ans": actual_ans,
         })
 
-    total_score = sum(r["score"] for r in results)
-    total_correct = sum(1 for r in results if r["score"] > 0)
-    total_abstain = sum(1 for r in results if r["score"] == 0)
-    total_incorrect = sum(1 for r in results if r["score"] < 0)
+    # Compute canonical penalized accuracy
+    all_refs = [
+        {
+            "id": item["id"],
+            "type": item["expected_type"],
+            "answer": item["expected_answer"],
+            "accepted_forms": item.get("accepted_forms"),
+        }
+        for item in benchmarks
+    ]
+    canonical_metrics = compute_penalized_accuracy(all_preds, all_refs)
 
     print("\n" + "="*80)
-    print(f"BENCHMARK RESULTS: {total} Questions")
-    print(f"Correct (+1): {total_correct} ({total_correct/total*100:.1f}%)")
-    print(f"Abstain ( 0): {total_abstain} ({total_abstain/total*100:.1f}%)")
-    print(f"Incorrect (-1): {total_incorrect} ({total_incorrect/total*100:.1f}%)")
-    print(f"Total Penalized Score: {total_score:.1f} / {total} ({total_score/total*100:.1f}%)")
+    print(f"CANONICAL BENCHMARK RESULTS: {canonical_metrics['total']} Questions")
+    print(f"PA Score: {canonical_metrics['pa']:+.4f}")
+    print(f"Correct (+1): {canonical_metrics['correct']} ({canonical_metrics['accuracy']*100:.1f}%)")
+    print(f"Abstain ( 0): {canonical_metrics['abstain']} ({canonical_metrics['abstain']/canonical_metrics['total']*100:.1f}%)")
+    print(f"Incorrect (-1): {canonical_metrics['wrong']} ({canonical_metrics['wrong']/canonical_metrics['total']*100:.1f}%)")
     print("="*80)
 
     print("\nCategory Breakdown:")

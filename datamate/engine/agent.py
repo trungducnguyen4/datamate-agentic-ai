@@ -5,11 +5,13 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from datamate.core.types import AnswerType, QuestionItem, SubmissionItem, ExecutionTrace
 from datamate.data.calendar_csv import configure_calendar
+from datamate.data.rulebook import configure_rulebook
 from datamate.data.loader import BusinessDataLoader
 from datamate.data.schema_inspector import SchemaInspector
 from datamate.data.union_view import ensure_sales_union
 from datamate.engine.executor import SafeSQLExecutor
 from datamate.engine.rule_compiler import BusinessRuleCompiler, CompiledQueryPlan
+from datamate.temporal.resolver import TemporalResolver
 
 logger = logging.getLogger("datamate.agent")
 
@@ -24,6 +26,7 @@ class DataMateAgent:
         self.split_root_dir = raw_root
         self.data_root_dir = self._resolve_data_root(raw_root)
         self._calendar = configure_calendar(raw_root, self.data_root_dir)
+        self._rulebook = configure_rulebook(raw_root, self.data_root_dir)
         self._loaders_cache: Dict[str, BusinessDataLoader] = {}
         self._tables_cache: Dict[str, Any] = {}
         self.last_trace: Optional[ExecutionTrace] = None
@@ -122,10 +125,13 @@ class DataMateAgent:
                 return SubmissionItem(id=item.id, type=AnswerType.ABSTAIN), trace
 
             phase = "COMPILER"
+            norm_as_of = TemporalResolver.normalize_as_of_date_str(item.as_of_date) if item.as_of_date else "2026-03-04"
             plan: CompiledQueryPlan = BusinessRuleCompiler.compile(
                 question=item.question,
-                as_of_date_str=item.as_of_date,
+                as_of_date_str=norm_as_of,
                 tables=tables,
+                rulebook=self._rulebook,
+                readme_text=loader.readme_text,
             )
             trace.intent = plan.intent
             trace.sql = plan.sql
@@ -160,6 +166,24 @@ class DataMateAgent:
             formatted_ans = self._format_answer(plan.expected_type, cols, rows)
             if formatted_ans is None:
                 trace.status = "ABSTAIN_NULL_FORMAT"
+                trace.latency_ms = (time.perf_counter() - start_time) * 1000
+                return SubmissionItem(id=item.id, type=AnswerType.ABSTAIN), trace
+
+            # Penalized Accuracy Safeguard: In business analytics queries (revenue, product quantity, growth, counts, debt),
+            # an answer of 0 or empty list almost always indicates unmatched WHERE conditions or missing dimensions.
+            # Returning 0 on non-zero reality yields -1 penalty, whereas ABSTAIN yields 0.
+            if plan.expected_type == AnswerType.LIST and (formatted_ans is None or len(formatted_ans) == 0):
+                trace.status = "ABSTAIN_EMPTY_LIST"
+                trace.latency_ms = (time.perf_counter() - start_time) * 1000
+                return SubmissionItem(id=item.id, type=AnswerType.ABSTAIN), trace
+
+            if formatted_ans in (0, 0.0) and plan.intent in (
+                "revenue", "product_revenue", "quantity", "product_quantity",
+                "which_day", "which_month", "avg_order_revenue", "growth_rate",
+                "ranking_product_revenue", "ranking_product_quantity",
+                "debt_max"
+            ):
+                trace.status = "ABSTAIN_ZERO_SAFEGUARD"
                 trace.latency_ms = (time.perf_counter() - start_time) * 1000
                 return SubmissionItem(id=item.id, type=AnswerType.ABSTAIN), trace
 
@@ -204,24 +228,58 @@ class DataMateAgent:
 
         elif ans_type == AnswerType.BOOLEAN:
             val = rows[0][0]
+            if val is None:
+                return None
+            if isinstance(val, str):
+                return val.strip().lower() in ("true", "1", "yes", "t")
+            if isinstance(val, (int, float)):
+                return bool(val != 0)
             return bool(val)
 
         elif ans_type == AnswerType.DATE:
             val = rows[0][0]
-            return str(val).strip()
+            if val is None:
+                return None
+            s_val = str(val).strip()
+            # Normalize timestamp to date if present (e.g. 2026-03-01 00:00:00 -> 2026-03-01)
+            date_part = s_val.split()[0] if " " in s_val else s_val
+            import re
+            if re.match(r"^\d{4}-\d{2}(-\d{2})?$", date_part):
+                return date_part
+            return s_val
 
         elif ans_type == AnswerType.LIST:
-            # Flatten column 0 into a list
+            # Flatten column 0 into a formatted list
             res_list = []
             for r in rows:
                 if r and r[0] is not None:
-                    res_list.append(r[0])
+                    item_val = r[0]
+                    if isinstance(item_val, float) and item_val.is_integer():
+                        item_val = int(item_val)
+                    elif isinstance(item_val, str):
+                        item_val = item_val.strip()
+                    res_list.append(item_val)
             return res_list
 
         elif ans_type == AnswerType.TABLE:
+            cleaned_rows = []
+            for r in rows:
+                cleaned_row = []
+                for cell in r:
+                    if cell is not None and not isinstance(cell, (int, float, bool)):
+                        cell_str = str(cell).strip().replace(",", "")
+                        try:
+                            f = float(cell_str)
+                            cell = int(f) if f.is_integer() else round(f, 2)
+                        except (ValueError, TypeError):
+                            cell = str(cell).strip()
+                    elif isinstance(cell, float) and cell.is_integer():
+                        cell = int(cell)
+                    cleaned_row.append(cell)
+                cleaned_rows.append(cleaned_row)
             return {
                 "columns": cols,
-                "rows": rows,
+                "rows": cleaned_rows,
             }
 
         return None
